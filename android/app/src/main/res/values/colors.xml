@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Бренд-цвета. Используются для launch screen и системного фона,
+         чтобы убрать белый flash между нативной splash и Flutter UI. -->
+    <color name="brand_splash">#0EA5E9</color>
+    <color name="brand_splash_dark">#0B1220</color>
+</resources>
