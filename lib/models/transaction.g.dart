@@ -29,13 +29,18 @@ class TransactionAdapter extends TypeAdapter<Transaction> {
       tags: (fields[9] as List).cast<String>(),
       isRecurring: fields[10] as bool,
       recurringPeriod: fields[11] as String?,
+      source: fields[12] as String?,
+      externalId: fields[13] as String?,
+      bankId: fields[14] as String?,
+      isDraft: (fields[15] as bool?) ?? false,
+      cardMask: fields[16] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Transaction obj) {
     writer
-      ..writeByte(12)
+      ..writeByte(17)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -59,7 +64,17 @@ class TransactionAdapter extends TypeAdapter<Transaction> {
       ..writeByte(10)
       ..write(obj.isRecurring)
       ..writeByte(11)
-      ..write(obj.recurringPeriod);
+      ..write(obj.recurringPeriod)
+      ..writeByte(12)
+      ..write(obj.source)
+      ..writeByte(13)
+      ..write(obj.externalId)
+      ..writeByte(14)
+      ..write(obj.bankId)
+      ..writeByte(15)
+      ..write(obj.isDraft)
+      ..writeByte(16)
+      ..write(obj.cardMask);
   }
 
   @override

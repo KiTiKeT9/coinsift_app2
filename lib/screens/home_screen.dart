@@ -17,6 +17,7 @@ import '../widgets/transaction_list.dart';
 import 'add_transaction_screen.dart';
 import 'accounts_screen.dart';
 import 'calculators_screen.dart';
+import 'drafts_screen.dart';
 import 'investments_screen.dart';
 import 'profile_screen.dart';
 
@@ -220,15 +221,12 @@ class _HomeTabState extends State<HomeTab> {
               ),
             ),
             actions: [
-              IconButton(
-                onPressed: () {},
-                icon: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.12),
-                    shape: BoxShape.circle,
+              _DraftsBellButton(
+                count: context.watch<TransactionsProvider>().drafts.length,
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const DraftsScreen(),
                   ),
-                  child: const Icon(Icons.notifications_outlined, color: AppColors.primary, size: 22),
                 ),
               ),
               const SizedBox(width: 8),
@@ -539,6 +537,43 @@ class _CategoryLegend extends StatelessWidget {
         if (data.isEmpty) return const SizedBox.shrink();
         return ExpenseLegend(data: data);
       },
+    );
+  }
+}
+
+/// Иконка-колокольчик в AppBar с бейджем количества черновиков из SMS/push.
+/// Открывает экран `DraftsScreen` для подтверждения операций.
+class _DraftsBellButton extends StatelessWidget {
+  const _DraftsBellButton({required this.count, required this.onTap});
+
+  final int count;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Badge.count(
+        count: count,
+        isLabelVisible: count > 0,
+        backgroundColor: AppColors.error,
+        child: IconButton(
+          onPressed: onTap,
+          tooltip: 'Черновики из SMS/push',
+          icon: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.notifications_outlined,
+              color: AppColors.primary,
+              size: 22,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

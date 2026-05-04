@@ -4,9 +4,10 @@ import 'package:provider/provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
-import '../providers/user_profile_provider.dart';
 import '../providers/accounts_provider.dart';
+import '../providers/bank_signals_controller.dart';
 import '../providers/investments_provider.dart';
+import '../providers/user_profile_provider.dart';
 import '../services/security_service.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_utils.dart';
@@ -116,6 +117,7 @@ class ProfileScreen extends StatelessWidget {
                           subtitle: 'Загрузка из файлов CSV/Excel',
                           onTap: () => Navigator.pushNamed(context, '/bank-import'),
                         ),
+                        const _BankSignalsTiles(),
                       ]),
                       
                       const SizedBox(height: 40),
@@ -547,6 +549,81 @@ class _SettingsItem extends StatelessWidget {
       title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
       subtitle: subtitle != null ? Text(subtitle!, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)) : null,
       trailing: trailing ?? const Icon(Icons.chevron_right_rounded, color: AppColors.textLight),
+    );
+  }
+}
+
+/// Пара переключателей внутри группы «Банки и импорт»:
+///   1. Импорт SMS — читает входящие SMS банков и делает из них черновики.
+///   2. Доступ к push-уведомлениям — то же для шторки уведомлений.
+///
+/// На не-Android платформах ничего не показывает (no-op сервисы).
+class _BankSignalsTiles extends StatelessWidget {
+  const _BankSignalsTiles();
+
+  @override
+  Widget build(BuildContext context) {
+    if (!Platform.isAndroid) return const SizedBox.shrink();
+
+    return Consumer<BankSignalsController>(
+      builder: (context, ctrl, _) {
+        return Column(
+          children: [
+            _SettingsItem(
+              icon: Icons.sms_outlined,
+              title: 'Импорт SMS банков',
+              subtitle: ctrl.smsEnabled
+                  ? (ctrl.lastImportedDrafts > 0
+                      ? 'Последний импорт: ${ctrl.lastImportedDrafts} сообщений'
+                      : 'Включён — слушаем входящие SMS')
+                  : 'Читать банковские SMS и создавать черновики',
+              trailing: Switch.adaptive(
+                value: ctrl.smsEnabled,
+                onChanged: (v) async {
+                  await ctrl.setSmsEnabled(v);
+                  if (!context.mounted) return;
+                  if (v && !ctrl.smsEnabled) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Разрешение на чтение SMS не выдано',
+                        ),
+                      ),
+                    );
+                  }
+                },
+                activeThumbColor: AppColors.primary,
+              ),
+            ),
+            _SettingsItem(
+              icon: Icons.notifications_active_outlined,
+              title: 'Push-уведомления банков',
+              subtitle: ctrl.pushEnabled
+                  ? 'Включено — слушаем шторку уведомлений'
+                  : ctrl.pushPermissionGranted
+                      ? 'Доступ выдан, можно включить'
+                      : 'Требуется доступ в настройках Android',
+              trailing: Switch.adaptive(
+                value: ctrl.pushEnabled,
+                onChanged: (v) async {
+                  await ctrl.setPushEnabled(v);
+                  if (!context.mounted) return;
+                  if (v && !ctrl.pushEnabled) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Доступ к уведомлениям не подтверждён',
+                        ),
+                      ),
+                    );
+                  }
+                },
+                activeThumbColor: AppColors.primary,
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

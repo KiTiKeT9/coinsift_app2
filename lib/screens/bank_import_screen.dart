@@ -1,11 +1,21 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../services/bank_statement_import_service.dart';
+
+import '../models/account.dart';
+import '../providers/accounts_provider.dart';
 import '../providers/transactions_provider.dart';
+import '../services/bank_statement_import_service.dart';
 import '../utils/app_colors.dart';
+import '../widgets/bank_logo.dart';
 
-
+/// Экран импорта банковских выписок.
+///
+/// Поток: пользователь выбирает банк → видит пошаговые инструкции
+/// "как выгрузить выписку" → выбирает счёт назначения → выбирает
+/// файл (CSV/XLSX/OFX) → импорт идёт через
+/// [TransactionsProvider.bulkImport] с дедупликацией.
 class BankImportScreen extends StatefulWidget {
   const BankImportScreen({super.key});
 
@@ -14,385 +24,394 @@ class BankImportScreen extends StatefulWidget {
 }
 
 class _BankImportScreenState extends State<BankImportScreen> {
-  bool _isEnabled = false;
-  File? _selectedFile;
-  bool _isImporting = false;
-  ImportResult? _lastResult;
-  String _selectedBank = 'universal';
+  String _bankId = SupportedBanks.all.first.id;
+  String? _accountId;
+  File? _file;
+  bool _busy = false;
+  ImportResult? _result;
+  BulkImportStats? _stats;
 
-  final Map<String, String> _bankOptions = {
-    'universal': 'Универсальный (авто)',
-    'tinkoff': 'Тинькофф',
-    'sber': 'Сбербанк',
-    'alfa': 'Альфа-Банк',
-    'vtb': 'ВТБ',
-  };
-
-  @override
-  void initState() {
-    super.initState();
-    _loadState();
-  }
-
-  Future<void> _loadState() async {
-    final enabled = await BankStatementImportService.isEnabled();
-    setState(() => _isEnabled = enabled);
-  }
-
-  Future<void> _toggleEnabled(bool value) async {
-    await BankStatementImportService.setEnabled(value);
-    setState(() => _isEnabled = value);
-  }
+  BankFormat get _bank => SupportedBanks.byId(_bankId);
 
   Future<void> _pickFile() async {
-    final file = await BankStatementImportService.pickStatementFile();
-    if (file != null) {
-      setState(() => _selectedFile = file);
-    }
+    final f = await BankStatementImportService.pickStatementFile();
+    if (f != null) setState(() => _file = f);
   }
 
-  Future<void> _importFile() async {
-    if (_selectedFile == null) return;
-
-    setState(() => _isImporting = true);
-
-    final result = await BankStatementImportService.importFromFile(
-      _selectedFile!,
-      accountId: 'imported_${DateTime.now().millisecondsSinceEpoch}',
-    );
+  Future<void> _import() async {
+    final accountId = _accountId;
+    final file = _file;
+    if (accountId == null || file == null) return;
 
     setState(() {
-      _lastResult = result;
-      _isImporting = false;
+      _busy = true;
+      _result = null;
+      _stats = null;
     });
 
-    if (result.success && result.transactions.isNotEmpty) {
-      if (!mounted) return;
-      // Добавляем транзакции в приложение
-      final transactionsProvider = context.read<TransactionsProvider>();
-      
-      for (final tx in result.transactions) {
-        await transactionsProvider.addTransaction(
-          accountId: tx.accountId,
-          amount: tx.amount,
-          category: tx.category,
-          description: tx.description,
-          type: tx.type,
-        );
-      }
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Импортировано ${result.transactions.length} транзакций'),
-            backgroundColor: AppColors.success,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    }
-  }
-
-  void _showInstructions() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Как экспортировать выписку'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButtonFormField<String>(
-                initialValue: _selectedBank,
-                decoration: const InputDecoration(labelText: 'Выберите банк'),
-                items: _bankOptions.entries
-                    .map((e) => DropdownMenuItem(
-                          value: e.key,
-                          child: Text(e.value),
-                        ))
-                    .toList(),
-                onChanged: (value) => setState(() => _selectedBank = value!),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: AppColors.info.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  BankStatementImportService.getExportInstructions(_selectedBank),
-                  style: const TextStyle(fontSize: 13),
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Понятно'),
-          ),
-        ],
-      ),
+    final result = await BankStatementImportService.importFromFile(
+      file,
+      accountId: accountId,
+      bankId: _bankId,
     );
+
+    BulkImportStats? stats;
+    if (result.success && result.transactions.isNotEmpty && mounted) {
+      stats = await context
+          .read<TransactionsProvider>()
+          .bulkImport(result.transactions);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _result = result;
+      _stats = stats;
+      _busy = false;
+    });
+
+    if (result.success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(stats == null
+              ? 'Импорт завершён'
+              : 'Добавлено ${stats.added}, '
+                  'подтверждено черновиков ${stats.merged}, '
+                  'дублей пропущено ${stats.skipped}'),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final accounts =
+        context.watch<AccountsProvider>().activeAccounts;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Импорт выписок'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.help_outline),
-            onPressed: _showInstructions,
-            tooltip: 'Инструкция',
+      appBar: AppBar(title: const Text('Импорт выписок')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _BankPicker(
+            current: _bankId,
+            onSelected: (id) => setState(() => _bankId = id),
           ),
+          const SizedBox(height: 16),
+          _InstructionsCard(bank: _bank),
+          const SizedBox(height: 16),
+          _AccountPicker(
+            accounts: accounts,
+            value: _accountId,
+            onChanged: (v) => setState(() => _accountId = v),
+          ),
+          const SizedBox(height: 16),
+          _FilePickerTile(
+            file: _file,
+            allowedExtensions: _bank.supportedExtensions,
+            onPick: _pickFile,
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed:
+                _busy || _file == null || _accountId == null ? null : _import,
+            icon: _busy
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.cloud_upload_outlined),
+            label: Text(_busy ? 'Импорт...' : 'Импортировать'),
+          ),
+          if (_result != null) ...[
+            const SizedBox(height: 24),
+            _ResultCard(result: _result!, stats: _stats),
+          ],
         ],
       ),
-      body: SingleChildScrollView(
+    );
+  }
+}
+
+class _BankPicker extends StatelessWidget {
+  const _BankPicker({required this.current, required this.onSelected});
+
+  final String current;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 92,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: SupportedBanks.all.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, i) {
+          final b = SupportedBanks.all[i];
+          final selected = b.id == current;
+          return InkWell(
+            onTap: () => onSelected(b.id),
+            borderRadius: BorderRadius.circular(16),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              width: 92,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: selected
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).dividerColor,
+                  width: selected ? 2 : 1,
+                ),
+                color: selected
+                    ? Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: 0.08)
+                    : null,
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  BankLogo(
+                    bankName: b.shortName,
+                    fallbackColorHex: b.colorHex,
+                    size: 36,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    b.shortName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _InstructionsCard extends StatelessWidget {
+  const _InstructionsCard({required this.bank});
+
+  final BankFormat bank;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Описание
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
+            Row(
+              children: [
+                const Icon(Icons.menu_book_outlined),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Как выгрузить выписку — ${bank.name}',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            for (int i = 0; i < bank.exportSteps.length; i++)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: AppColors.primary.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(
-                            Icons.upload_file,
-                            color: AppColors.primary,
-                            size: 28,
-                          ),
+                    CircleAvatar(
+                      radius: 12,
+                      backgroundColor: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withValues(alpha: 0.15),
+                      child: Text(
+                        '${i + 1}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.primary,
                         ),
-                        const SizedBox(width: 16),
-                        const Expanded(
-                          child: Text(
-                            'Импорт банковских выписок',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Загружайте выписки из банков в формате CSV или Excel. '
-                      'Приложение автоматически распознает транзакции и категории.',
-                      style: TextStyle(color: AppColors.textSecondary),
-                    ),
-                    const SizedBox(height: 16),
-                    SwitchListTile(
-                      title: const Text('Включить импорт'),
-                      subtitle: const Text('Загрузка выписок из файлов'),
-                      value: _isEnabled,
-                      onChanged: _toggleEnabled,
-                      activeThumbColor: AppColors.success,
-                    ),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(bank.exportSteps[i])),
                   ],
                 ),
               ),
+            const SizedBox(height: 4),
+            Text(
+              'Поддерживаемые форматы: ${bank.supportedExtensions.join(', ').toUpperCase()}',
+              style: Theme.of(context).textTheme.bodySmall,
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
-            if (_isEnabled) ...[
-              const SizedBox(height: 24),
+class _AccountPicker extends StatelessWidget {
+  const _AccountPicker({
+    required this.accounts,
+    required this.value,
+    required this.onChanged,
+  });
 
-              // Выбор файла
-              const Text(
-                'Выберите файл выписки',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
+  final List<Account> accounts;
+  final String? value;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    if (accounts.isEmpty) {
+      return Card(
+        color: AppColors.warning.withValues(alpha: 0.08),
+        child: const Padding(
+          padding: EdgeInsets.all(16),
+          child: Text(
+            'Сначала добавьте счёт в разделе «Счета», '
+            'чтобы было куда импортировать транзакции.',
+          ),
+        ),
+      );
+    }
+    return DropdownButtonFormField<String>(
+      initialValue: value,
+      decoration: const InputDecoration(
+        labelText: 'Счёт назначения',
+        border: OutlineInputBorder(),
+      ),
+      items: [
+        for (final a in accounts)
+          DropdownMenuItem(
+            value: a.id,
+            child: Text('${a.name} • ${a.balance.toStringAsFixed(0)} ${a.currency}'),
+          ),
+      ],
+      onChanged: onChanged,
+    );
+  }
+}
+
+class _FilePickerTile extends StatelessWidget {
+  const _FilePickerTile({
+    required this.file,
+    required this.allowedExtensions,
+    required this.onPick,
+  });
+
+  final File? file;
+  final List<String> allowedExtensions;
+  final VoidCallback onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onPick,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: file != null
+                ? AppColors.success
+                : Theme.of(context).dividerColor,
+            width: file != null ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              file != null
+                  ? Icons.insert_drive_file_outlined
+                  : Icons.cloud_upload_outlined,
+              size: 36,
+              color: file != null
+                  ? AppColors.success
+                  : Theme.of(context).colorScheme.primary,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    file != null ? 'Файл выбран' : 'Выбрать файл выписки',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    file != null
+                        ? file!.path.split(Platform.pathSeparator).last
+                        : 'Поддерживаются ${allowedExtensions.join(', ').toUpperCase()}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
-              GestureDetector(
-                onTap: _pickFile,
-                child: Container(
-                  width: double.infinity,
-                  height: 150,
-                  decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: _selectedFile != null
-                          ? AppColors.success
-                          : AppColors.textLight.withValues(alpha: 0.3),
-                      width: 2,
-                    ),
-                  ),
-                  child: Center(
-                    child: _selectedFile != null
-                        ? Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: AppColors.success.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(50),
-                                ),
-                                child: const Icon(
-                                  Icons.check_circle,
-                                  color: AppColors.success,
-                                  size: 48,
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              const Text(
-                                'Файл выбран',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                _selectedFile!.path.split('/').last,
-                                style: const TextStyle(
-                                  color: AppColors.textSecondary,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          )
-                        : Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: AppColors.primary.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(50),
-                                ),
-                                child: const Icon(
-                                  Icons.cloud_upload,
-                                  color: AppColors.primary,
-                                  size: 48,
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              const Text(
-                                'Нажмите для выбора файла',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              const Text(
-                                'Поддерживаются CSV, XLSX, XLS',
-                                style: TextStyle(
-                                  color: AppColors.textSecondary,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
+class _ResultCard extends StatelessWidget {
+  const _ResultCard({required this.result, required this.stats});
+
+  final ImportResult result;
+  final BulkImportStats? stats;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  result.success ? Icons.check_circle : Icons.error_outline,
+                  color: result.success ? AppColors.success : AppColors.error,
                 ),
-              ),
-
-              if (_selectedFile != null) ...[
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: _isImporting ? null : _importFile,
-                    icon: _isImporting
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.import_export),
-                    label: Text(_isImporting ? 'Импорт...' : 'Импортировать'),
-                  ),
+                const SizedBox(width: 8),
+                Text(
+                  result.success ? 'Импорт завершён' : 'Ошибка импорта',
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
               ],
-
-              if (_lastResult != null) ...[
-                const SizedBox(height: 24),
-
-                // Результат импорта
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(
-                              _lastResult!.success
-                                  ? Icons.check_circle
-                                  : Icons.error,
-                              color: _lastResult!.success
-                                  ? AppColors.success
-                                  : AppColors.error,
-                              size: 32,
-                            ),
-                            const SizedBox(width: 12),
-                            Text(
-                              _lastResult!.success
-                                  ? 'Импорт завершён'
-                                  : 'Ошибка импорта',
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        if (_lastResult!.success) ...[
-                          _buildStatRow('Всего строк', _lastResult!.totalRows.toString()),
-                          _buildStatRow('Импортировано', _lastResult!.importedRows.toString()),
-                          _buildStatRow('Пропущено', _lastResult!.skippedRows.toString()),
-                        ] else
-                          Text(
-                            _lastResult!.error ?? 'Неизвестная ошибка',
-                            style: const TextStyle(color: AppColors.error),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
+            ),
+            const SizedBox(height: 12),
+            if (!result.success)
+              Text(result.error ?? 'Неизвестная ошибка',
+                  style: const TextStyle(color: AppColors.error))
+            else ...[
+              _row('Всего строк в файле', result.totalRows.toString()),
+              _row('Распознано', result.importedRows.toString()),
+              _row('Не распознано', result.skippedRows.toString()),
+              if (stats != null) ...[
+                const Divider(height: 24),
+                _row('Добавлено новых', stats!.added.toString()),
+                _row('Подтверждено черновиков', stats!.merged.toString()),
+                _row('Дубликатов пропущено', stats!.skipped.toString()),
               ],
-
-              const SizedBox(height: 24),
-
-              // Поддерживаемые форматы
-              const Text(
-                'Поддерживаемые банки',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              _buildBankSupportCard('Тинькофф', 'CSV, Excel', true),
-              _buildBankSupportCard('Сбербанк', 'CSV, Excel', true),
-              _buildBankSupportCard('Альфа-Банк', 'CSV', true),
-              _buildBankSupportCard('ВТБ', 'CSV, Excel', true),
-              _buildBankSupportCard('Другие банки', 'CSV', true),
             ],
           ],
         ),
@@ -400,57 +419,14 @@ class _BankImportScreenState extends State<BankImportScreen> {
     );
   }
 
-  Widget _buildStatRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(color: AppColors.textSecondary),
-          ),
-          Text(
-            value,
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBankSupportCard(String name, String formats, bool supported) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: Container(
-          width: 50,
-          height: 50,
-          decoration: BoxDecoration(
-            color: supported
-                ? AppColors.success.withValues(alpha: 0.1)
-                : AppColors.textLight.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(
-            supported ? Icons.check_circle : Icons.block,
-            color: supported ? AppColors.success : AppColors.textLight,
-          ),
+  Widget _row(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label),
+            Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+          ],
         ),
-        title: Text(name),
-        subtitle: Text('Форматы: $formats'),
-        trailing: supported
-            ? const Chip(
-                label: Text('Поддерживается'),
-                backgroundColor: AppColors.success,
-                labelStyle: TextStyle(color: Colors.white),
-              )
-            : const Chip(
-                label: Text('Не поддерживается'),
-                backgroundColor: AppColors.textLight,
-                labelStyle: TextStyle(color: Colors.white),
-              ),
-      ),
-    );
-  }
+      );
 }

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
 import '../models/investment_instrument.dart';
 
@@ -229,7 +230,71 @@ class InvestmentApiService {
     }
   }
 
-  /// Получение списка популярных инвестиционных инструментов с MOEX
+  /// Имя Hive-бокса с закешированным каталогом инструментов и ценами.
+  /// Заполняется в [getPopularInstruments] и возвращается, когда MOEX
+  /// недоступен (таймаут/сетевая ошибка), чтобы пользователь не видел
+  /// пустой экран.
+  static const String _catalogBoxName = 'investment_catalog';
+  static const String _catalogKey = 'popular';
+
+  static Future<Box<dynamic>?> _openCatalogBox() async {
+    try {
+      if (Hive.isBoxOpen(_catalogBoxName)) {
+        return Hive.box<dynamic>(_catalogBoxName);
+      }
+      return await Hive.openBox<dynamic>(_catalogBoxName);
+    } catch (e) {
+      debugPrint('Не удалось открыть catalog box: $e');
+      return null;
+    }
+  }
+
+  static List<InvestmentInstrument> _decodeCachedCatalog(dynamic raw) {
+    if (raw is! List) return const [];
+    final result = <InvestmentInstrument>[];
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final ticker = item['ticker'];
+      final name = item['name'];
+      final type = item['type'];
+      if (ticker is! String || name is! String || type is! String) continue;
+      result.add(InvestmentInstrument(
+        ticker: ticker,
+        name: name,
+        type: type,
+        sector: item['sector'] as String?,
+        price: (item['price'] as num?)?.toDouble(),
+        dayChange: (item['dayChange'] as num?)?.toDouble(),
+        dayChangePercent: (item['dayChangePercent'] as num?)?.toDouble(),
+        currency: item['currency'] as String? ?? 'RUB',
+      ));
+    }
+    return result;
+  }
+
+  static List<Map<String, dynamic>> _encodeCatalog(
+      List<InvestmentInstrument> items) {
+    return items
+        .map((i) => {
+              'ticker': i.ticker,
+              'name': i.name,
+              'type': i.type,
+              'sector': i.sector,
+              'price': i.price,
+              'dayChange': i.dayChange,
+              'dayChangePercent': i.dayChangePercent,
+              'currency': i.currency,
+            })
+        .toList();
+  }
+
+  /// Получение списка популярных инвестиционных инструментов с MOEX.
+  ///
+  /// Стратегия:
+  /// 1. Пытаемся сходить в MOEX; при успехе — обновляем Hive-кеш.
+  /// 2. Если MOEX недоступен (таймаут/ошибка) — возвращаем последнее
+  ///    закешированное значение из Hive.
+  /// 3. Если кеша тоже нет — возвращаем встроенный fallback-список.
   static Future<List<InvestmentInstrument>> getPopularInstruments() async {
     final List<InvestmentInstrument> instruments = [];
 
@@ -314,12 +379,23 @@ class InvestmentApiService {
       debugPrint('Ошибка получения популярных инструментов MOEX: $e');
     }
 
-    // Если не удалось получить данные, возвращаем заглушку с популярными акциями
-    if (instruments.isEmpty) {
-      return _getDefaultInstruments();
+    if (instruments.isNotEmpty) {
+      // Сохраняем успешный ответ в Hive — пригодится в офлайне.
+      try {
+        final box = await _openCatalogBox();
+        await box?.put(_catalogKey, _encodeCatalog(instruments));
+      } catch (e) {
+        debugPrint('Не удалось сохранить кеш каталога: $e');
+      }
+      return instruments;
     }
 
-    return instruments;
+    // MOEX недоступен — пробуем последний закешированный каталог.
+    final box = await _openCatalogBox();
+    final cached = _decodeCachedCatalog(box?.get(_catalogKey));
+    if (cached.isNotEmpty) return cached;
+
+    return _getDefaultInstruments();
   }
 
   /// Поиск инструментов по тикеру или названию
@@ -385,6 +461,87 @@ class InvestmentApiService {
     }
 
     return results;
+  }
+
+  /// Одним HTTP-запросом тянет marketdata для всей доски TQBR и
+  /// возвращает map тикер → последняя цена. Этот эндпоинт ощутимо
+  /// быстрее и стабильнее, чем точечные `getMoexPrice` по каждому
+  /// тикеру (которые любят таймаутить на медленной сети).
+  static Future<Map<String, double>> getMoexBoardPrices({
+    String board = 'TQBR',
+  }) async {
+    try {
+      final url =
+          '$_moexBaseUrl/engines/stock/markets/shares/boards/$board/securities.json?marketdata=marketdata';
+      final resp = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 12));
+      if (resp.statusCode != 200) return const {};
+      final data = json.decode(resp.body);
+      final md = data['marketdata'];
+      if (md is! Map ||
+          md['columns'] is! List ||
+          md['data'] is! List) {
+        return const {};
+      }
+      final cols = (md['columns'] as List).cast<String>();
+      final secidIdx = cols.indexOf('SECID');
+      final lastIdx = cols.indexOf('LAST');
+      if (secidIdx == -1 || lastIdx == -1) return const {};
+      final out = <String, double>{};
+      for (final row in (md['data'] as List)) {
+        if (row is! List) continue;
+        final ticker = row[secidIdx];
+        final price = row[lastIdx];
+        if (ticker is String && price is num && price > 0) {
+          out[ticker.toUpperCase()] = price.toDouble();
+        }
+      }
+      return out;
+    } catch (e) {
+      debugPrint('Ошибка batch-загрузки цен MOEX: $e');
+      return const {};
+    }
+  }
+
+  /// Возвращает массив цен закрытия за последние [days] торговых дней.
+  /// Используется для рисования sparkline-графика в каталоге/карточке актива.
+  /// При ошибке вернёт пустой список — UI покажет заглушку.
+  static Future<List<double>> getCandles(String ticker, {int days = 30}) async {
+    try {
+      final from = DateTime.now().subtract(Duration(days: days * 2));
+      final fromStr =
+          '${from.year}-${from.month.toString().padLeft(2, '0')}-${from.day.toString().padLeft(2, '0')}';
+      final url =
+          '$_moexBaseUrl/engines/stock/markets/shares/securities/$ticker/candles.json'
+          '?from=$fromStr&interval=24';
+      final resp = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 10));
+      if (resp.statusCode != 200) return const [];
+      final data = json.decode(resp.body);
+      final candles = data['candles'];
+      if (candles is! Map ||
+          candles['columns'] is! List ||
+          candles['data'] is! List) {
+        return const [];
+      }
+      final cols = (candles['columns'] as List).cast<String>();
+      final closeIdx = cols.indexOf('close');
+      if (closeIdx == -1) return const [];
+      final rows = candles['data'] as List;
+      final closes = <double>[];
+      for (final row in rows) {
+        if (row is List && row.length > closeIdx && row[closeIdx] is num) {
+          closes.add((row[closeIdx] as num).toDouble());
+        }
+      }
+      if (closes.length <= days) return closes;
+      return closes.sublist(closes.length - days);
+    } catch (e) {
+      debugPrint('Ошибка получения свечей для $ticker: $e');
+      return const [];
+    }
   }
 
   /// Получение детальной информации об инструменте

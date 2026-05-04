@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,11 +13,13 @@ import 'models/investment.dart';
 import 'models/calculator_record.dart';
 
 import 'providers/accounts_provider.dart';
-import 'providers/transactions_provider.dart';
+import 'providers/bank_signals_controller.dart';
 import 'providers/investments_provider.dart';
+import 'providers/transactions_provider.dart';
 import 'providers/user_profile_provider.dart';
 
 import 'services/database_service.dart';
+import 'services/logo_cache_service.dart';
 import 'services/security_service.dart';
 
 import 'screens/home_screen.dart';
@@ -73,6 +76,7 @@ Future<void> _initStorage() async {
 
   await SecurityService().init();
   await DatabaseService().init();
+  await LogoCacheService.instance.init();
 }
 
 Future<void> _clearHiveBoxes() async {
@@ -101,6 +105,15 @@ class CoinSiftApp extends StatelessWidget {
         // применялась с первого кадра, ещё до Splash.
         ChangeNotifierProvider(
           create: (_) => UserProfileProvider()..loadProfile(),
+        ),
+        // Банковские сигналы (SMS + push) — зависят от TransactionsProvider
+        // для вызова bulkImport, поэтому через ProxyProvider.
+        ChangeNotifierProxyProvider<TransactionsProvider, BankSignalsController>(
+          create: (context) => BankSignalsController(
+            context.read<TransactionsProvider>(),
+          ),
+          update: (_, txs, prev) =>
+              (prev ?? BankSignalsController(txs))..updateTransactions(txs),
         ),
       ],
       child: Consumer<UserProfileProvider>(
@@ -172,6 +185,13 @@ class _SplashScreenState extends State<SplashScreen>
         transactionsProvider.loadTransactions(),
         investmentsProvider.loadInvestments(),
       ]);
+
+      // Автостарт SMS/push-листенеров, если пользователь их включал.
+      if (mounted) {
+        unawaited(
+          context.read<BankSignalsController>().autoStart(),
+        );
+      }
 
       await Future.delayed(const Duration(milliseconds: 1000));
 

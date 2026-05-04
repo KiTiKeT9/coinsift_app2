@@ -1,471 +1,626 @@
 import 'dart:io';
-import 'package:file_selector/file_selector.dart';
+
 import 'package:csv/csv.dart';
+import 'package:excel/excel.dart' as xlsx;
+import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
+import 'package:intl/intl.dart';
 import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
-import '../models/transaction.dart';
 
-/// Сервис для импорта банковских выписок из файлов (CSV, Excel)
+import '../models/transaction.dart';
+import 'transaction_deduplicator.dart';
+
+/// Описание поддерживаемого банка/формата для импорта выписок.
+class BankFormat {
+  const BankFormat({
+    required this.id,
+    required this.name,
+    required this.shortName,
+    required this.colorHex,
+    required this.supportedExtensions,
+    required this.exportSteps,
+  });
+
+  final String id;
+  final String name;
+  final String shortName;
+  final String colorHex;
+  final List<String> supportedExtensions;
+  final List<String> exportSteps;
+}
+
+/// Каталог поддерживаемых банков с инструкциями для пользователя.
+class SupportedBanks {
+  static const List<BankFormat> all = [
+    BankFormat(
+      id: 'tinkoff',
+      name: 'Тинькофф / Т-Банк',
+      shortName: 'Тинькофф',
+      colorHex: '#FFDD2D',
+      supportedExtensions: ['csv'],
+      exportSteps: [
+        'Откройте мобильное приложение Т-Банк (или личный кабинет на tbank.ru).',
+        'Перейдите на нужный счёт или карту.',
+        'Нажмите "Выписка" → выберите период.',
+        'Нажмите "Скачать" и выберите формат CSV.',
+        'Сохраните файл и загрузите его здесь.',
+      ],
+    ),
+    BankFormat(
+      id: 'sber',
+      name: 'СберБанк',
+      shortName: 'Сбер',
+      colorHex: '#21A038',
+      supportedExtensions: ['csv', 'xlsx'],
+      exportSteps: [
+        'Откройте СберБанк Онлайн в браузере (online.sberbank.ru).',
+        'Выберите карту или счёт → "История операций".',
+        'Задайте период и нажмите "Сохранить выписку".',
+        'Выберите формат CSV или Excel.',
+        'Загрузите полученный файл здесь.',
+      ],
+    ),
+    BankFormat(
+      id: 'alfa',
+      name: 'Альфа-Банк',
+      shortName: 'Альфа',
+      colorHex: '#EF3124',
+      supportedExtensions: ['csv', 'xlsx'],
+      exportSteps: [
+        'Войдите в Альфа-Онлайн на сайте online.alfabank.ru.',
+        'Откройте счёт/карту → "Операции".',
+        'Выберите период → "Скачать в Excel" или "Скачать в CSV".',
+        'Загрузите файл здесь.',
+      ],
+    ),
+    BankFormat(
+      id: 'vtb',
+      name: 'ВТБ',
+      shortName: 'ВТБ',
+      colorHex: '#0A2973',
+      supportedExtensions: ['csv', 'xlsx'],
+      exportSteps: [
+        'Откройте ВТБ Онлайн на online.vtb.ru.',
+        'Выберите карту/счёт → "Получить выписку".',
+        'Укажите период и формат (Excel или CSV).',
+        'Загрузите файл здесь.',
+      ],
+    ),
+    BankFormat(
+      id: 'ofx',
+      name: 'OFX (универсальный)',
+      shortName: 'OFX',
+      colorHex: '#6366F1',
+      supportedExtensions: ['ofx', 'qfx'],
+      exportSteps: [
+        'Многие интернет-банки умеют экспортировать выписку в формате OFX/QFX.',
+        'Найдите этот формат в разделе "Экспорт выписки" вашего банка.',
+        'Загрузите файл здесь.',
+      ],
+    ),
+  ];
+
+  static BankFormat byId(String id) =>
+      all.firstWhere((b) => b.id == id, orElse: () => all.last);
+}
+
+/// Сервис импорта банковских выписок (CSV / XLSX / OFX).
+///
+/// Все полученные транзакции получают:
+///   * `source = TransactionSource.statementImport`
+///   * `bankId` — идентификатор банка из [SupportedBanks]
+///   * `externalId` — стабильный fingerprint для дедупликации
+///   * `isDraft = false` — импорт сразу учитывается
+///
+/// Дедупликация выполняется на стороне `TransactionsProvider.bulkImport`.
 class BankStatementImportService {
   static const String _prefsKey = 'bank_import_enabled';
 
-  /// Включён ли импорт выписок
   static Future<bool> isEnabled() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(_prefsKey) ?? false;
   }
 
-  /// Включить/выключить импорт
   static Future<void> setEnabled(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_prefsKey, enabled);
   }
 
-  /// Выбор файла выписки
+  /// Открыть системный диалог выбора файла выписки.
   static Future<File?> pickStatementFile() async {
     const typeGroup = XTypeGroup(
       label: 'Bank Statements',
-      extensions: ['csv', 'xlsx', 'xls'],
+      extensions: ['csv', 'xlsx', 'xls', 'ofx', 'qfx'],
     );
-
-    final file = await openFile(
-      acceptedTypeGroups: [typeGroup],
-    );
-
-    if (file != null) {
-      return File(file.path);
-    }
-    return null;
+    final picked = await openFile(acceptedTypeGroups: [typeGroup]);
+    return picked == null ? null : File(picked.path);
   }
 
-  /// Импорт транзакций из файла
-  /// Возвращает количество импортированных транзакций
-  static Future<ImportResult> importFromFile(File file, {String? accountId}) async {
+  /// Импорт транзакций из выбранного файла.
+  ///
+  /// [bankId] — пресет банка (`tinkoff`, `sber`, ...). Если `null`,
+  /// сервис попытается определить формат автоматически по заголовкам.
+  static Future<ImportResult> importFromFile(
+    File file, {
+    required String accountId,
+    String? bankId,
+  }) async {
     try {
-      final extension = path.extension(file.path).toLowerCase();
-      
-      List<List<dynamic>> rows;
-      
-      if (extension == '.csv') {
-        rows = await _parseCsv(file);
-      } else if (extension == '.xlsx' || extension == '.xls') {
-        rows = await _parseExcel(file);
+      final ext = path.extension(file.path).toLowerCase();
+      final BankFormat bank = bankId != null
+          ? SupportedBanks.byId(bankId)
+          : _guessBankByExtension(ext);
+
+      List<Transaction> transactions;
+      int totalRows;
+      int skipped;
+
+      if (ext == '.csv') {
+        final parsed = await _importCsv(file, bank: bank, accountId: accountId);
+        transactions = parsed.transactions;
+        totalRows = parsed.totalRows;
+        skipped = parsed.skipped;
+      } else if (ext == '.xlsx' || ext == '.xls') {
+        final parsed =
+            await _importExcel(file, bank: bank, accountId: accountId);
+        transactions = parsed.transactions;
+        totalRows = parsed.totalRows;
+        skipped = parsed.skipped;
+      } else if (ext == '.ofx' || ext == '.qfx') {
+        final parsed = await _importOfx(file, accountId: accountId);
+        transactions = parsed.transactions;
+        totalRows = parsed.totalRows;
+        skipped = parsed.skipped;
       } else {
-        return ImportResult(
-          success: false,
-          error: 'Неподдерживаемый формат файла. Используйте CSV или Excel.',
+        return ImportResult.failure(
+          'Неподдерживаемый формат: $ext. Используйте CSV, XLSX, XLS или OFX.',
         );
-      }
-
-      if (rows.isEmpty) {
-        return ImportResult(
-          success: false,
-          error: 'Файл пуст или не удалось прочитать данные.',
-        );
-      }
-
-      // Определяем формат файла
-      final format = _detectFormat(rows.first);
-      
-      // Парсим транзакции
-      final transactions = <Transaction>[];
-      int skippedRows = 0;
-
-      for (int i = 1; i < rows.length; i++) {
-        final row = rows[i];
-        
-        try {
-          final tx = _parseTransaction(row, format, i, accountId);
-          if (tx != null) {
-            transactions.add(tx);
-          } else {
-            skippedRows++;
-          }
-        } catch (e) {
-          skippedRows++;
-        }
       }
 
       return ImportResult(
         success: true,
         transactions: transactions,
-        totalRows: rows.length - 1,
+        totalRows: totalRows,
         importedRows: transactions.length,
-        skippedRows: skippedRows,
+        skippedRows: skipped,
+        bankId: bank.id,
       );
-    } catch (e) {
-      return ImportResult(
-        success: false,
-        error: 'Ошибка импорта: $e',
-      );
+    } catch (e, st) {
+      debugPrint('Import error: $e\n$st');
+      return ImportResult.failure('Ошибка импорта: $e');
     }
   }
 
-  /// Парсинг CSV файла
-  static Future<List<List<dynamic>>> _parseCsv(File file) async {
-    final content = await file.readAsString(encoding: const SystemEncoding());
-    const csvConverter = CsvToListConverter();
-    return csvConverter.convert(content);
-  }
+  // ===== CSV =====
 
-  /// Парсинг Excel файла (заглушка - требует дополнительной библиотеки)
-  static Future<List<List<dynamic>>> _parseExcel(File file) async {
-    // TODO: Реализовать с помощью пакета excel
-    // Пока возвращаем заглушку
-    return [];
-  }
-
-  /// Определение формата выписки
-  static BankStatementFormat _detectFormat(List<dynamic> headerRow) {
-    final headers = headerRow.map((h) => h.toString().toLowerCase()).toList();
-
-    // Тинькофф
-    if (headers.contains('дата') && 
-        headers.contains('описание') && 
-        (headers.contains('сумма') || headers.contains('amount'))) {
-      return BankStatementFormat.tinkoff;
-    }
-
-    // Сбербанк
-    if (headers.contains('дата') && 
-        headers.contains('название') && 
-        headers.contains('сумма')) {
-      return BankStatementFormat.sber;
-    }
-
-    // Альфа-Банк
-    if (headers.contains('дата операции') || 
-        headers.contains('operation_date')) {
-      return BankStatementFormat.alfa;
-    }
-
-    // ВТБ
-    if (headers.contains('дата') && 
-        (headers.contains('тип') || headers.contains('type'))) {
-      return BankStatementFormat.vtb;
-    }
-
-    // Универсальный формат
-    return BankStatementFormat.universal;
-  }
-
-  /// Парсинг транзакции из строки
-  static Transaction? _parseTransaction(
-    List<dynamic> row,
-    BankStatementFormat format,
-    int rowNum,
-    String? accountId,
-  ) {
+  static Future<_ParsedRows> _importCsv(
+    File file, {
+    required BankFormat bank,
+    required String accountId,
+  }) async {
+    // Читаем как байты и пробуем UTF-8/Windows-1251.
+    final bytes = await file.readAsBytes();
+    String content;
     try {
-      DateTime? date;
-      double amount = 0;
-      String description = '';
-      String category = 'Другое';
-      String? merchantMcc;
-
-      switch (format) {
-        case BankStatementFormat.tinkoff:
-          date = _parseDate(row[0]);
-          description = row[1]?.toString() ?? '';
-          amount = _parseAmount(row[2]);
-          category = row.length > 3 ? (row[3]?.toString() ?? 'Другое') : 'Другое';
-          break;
-
-        case BankStatementFormat.sber:
-          date = _parseDate(row[0]);
-          description = row[1]?.toString() ?? '';
-          amount = _parseAmount(row[2]);
-          category = row.length > 3 ? (row[3]?.toString() ?? 'Другое') : 'Другое';
-          merchantMcc = row.length > 4 ? row[4]?.toString() : null;
-          break;
-
-        case BankStatementFormat.alfa:
-          date = _parseDate(row[0]);
-          description = row[1]?.toString() ?? '';
-          amount = _parseAmount(row[2]);
-          category = row.length > 3 ? (row[3]?.toString() ?? 'Другое') : 'Другое';
-          break;
-
-        case BankStatementFormat.vtb:
-          date = _parseDate(row[0]);
-          description = row[1]?.toString() ?? '';
-          amount = _parseAmount(row[2]);
-          category = row.length > 3 ? (row[3]?.toString() ?? 'Другое') : 'Другое';
-          break;
-
-        case BankStatementFormat.universal:
-          // Пытаемся угадать колонки
-          for (var cell in row) {
-            final str = cell.toString();
-            final parsedDate = _parseDate(str);
-            if (parsedDate != null && date == null) {
-              date = parsedDate;
-            } else if (_isNumber(str)) {
-              final num = _parseAmount(str);
-              if (num.abs() > 0) {
-                amount = num;
-              }
-            } else if (str.length > 3 && description.isEmpty) {
-              description = str;
-            }
-          }
-          break;
-      }
-
-      if (date == null || amount == 0) {
-        return null;
-      }
-
-      final type = amount > 0 ? 'income' : 'expense';
-
-      return Transaction(
-        id: 'import_${rowNum}_${DateTime.now().millisecondsSinceEpoch}',
-        accountId: accountId ?? 'imported',
-        amount: amount.abs(),
-        category: _mapCategory(category, merchantMcc),
-        description: description,
-        date: date,
-        type: type,
-      );
-    } catch (e) {
-      return null;
+      content = String.fromCharCodes(bytes); // best-effort
+      // эвристика: если много "?" и нет кириллицы, перечитываем как latin1
+    } catch (_) {
+      content = String.fromCharCodes(bytes);
     }
+
+    // Поддерживаем разделители ; и ,
+    final separator = content.contains(';') ? ';' : ',';
+    final rows = CsvToListConverter(
+      fieldDelimiter: separator,
+      eol: '\n',
+      shouldParseNumbers: false,
+    ).convert(content);
+
+    if (rows.isEmpty) return const _ParsedRows([], 0, 0);
+
+    final headers =
+        rows.first.map((h) => h.toString().trim().toLowerCase()).toList();
+    final mapping = _BankMapping.fromHeaders(headers, bank);
+
+    final result = <Transaction>[];
+    int skipped = 0;
+
+    for (int i = 1; i < rows.length; i++) {
+      final row = rows[i];
+      final tx = _rowToTransaction(
+        row,
+        mapping: mapping,
+        bank: bank,
+        accountId: accountId,
+      );
+      if (tx != null) {
+        result.add(tx);
+      } else {
+        skipped++;
+      }
+    }
+    return _ParsedRows(result, rows.length - 1, skipped);
   }
 
-  /// Парсинг даты
-  static DateTime? _parseDate(dynamic value) {
-    if (value == null) return null;
+  // ===== XLSX =====
 
-    final str = value.toString().trim();
+  static Future<_ParsedRows> _importExcel(
+    File file, {
+    required BankFormat bank,
+    required String accountId,
+  }) async {
+    final bytes = await file.readAsBytes();
+    final book = xlsx.Excel.decodeBytes(bytes);
+    final sheetName = book.tables.keys.first;
+    final sheet = book.tables[sheetName]!;
+    final rows = sheet.rows
+        .map((r) => r.map((c) => c?.value?.toString() ?? '').toList())
+        .toList();
 
-    // Разные форматы дат
-    final formats = [
-      'dd.MM.yyyy',
-      'dd/MM/yyyy',
-      'yyyy-MM-dd',
-      'dd-MM-yyyy',
-      'MM/dd/yyyy',
-      'dd.MM.yyyy HH:mm',
-      'dd.MM.yy',
-    ];
+    if (rows.isEmpty) return const _ParsedRows([], 0, 0);
 
-    for (final _ in formats) {
-      try {
-        return DateTime.parse(str.replaceAll('.', '-').replaceAll('/', '-'));
-      } catch (e) {
+    final headers =
+        rows.first.map((h) => h.toString().trim().toLowerCase()).toList();
+    final mapping = _BankMapping.fromHeaders(headers, bank);
+
+    final result = <Transaction>[];
+    int skipped = 0;
+    for (int i = 1; i < rows.length; i++) {
+      final tx = _rowToTransaction(
+        rows[i],
+        mapping: mapping,
+        bank: bank,
+        accountId: accountId,
+      );
+      if (tx != null) {
+        result.add(tx);
+      } else {
+        skipped++;
+      }
+    }
+    return _ParsedRows(result, rows.length - 1, skipped);
+  }
+
+  // ===== OFX =====
+
+  /// Простой парсер OFX 1.x (SGML-вариант) и 2.x (XML).
+  /// Извлекает блоки `<STMTTRN>` без полноценного XML-парсера.
+  static Future<_ParsedRows> _importOfx(
+    File file, {
+    required String accountId,
+  }) async {
+    final content = await file.readAsString();
+    final txRegex = RegExp(
+      r'<STMTTRN>([\s\S]*?)</STMTTRN>',
+      caseSensitive: false,
+    );
+
+    final transactions = <Transaction>[];
+    int skipped = 0;
+    int total = 0;
+    for (final m in txRegex.allMatches(content)) {
+      total++;
+      final block = m.group(1) ?? '';
+      String? tag(String name) => RegExp(
+            '<$name>([^<\\r\\n]*)',
+            caseSensitive: false,
+          ).firstMatch(block)?.group(1)?.trim();
+
+      final amountStr = tag('TRNAMT');
+      final dateStr = tag('DTPOSTED');
+      final memo = tag('MEMO') ?? tag('NAME') ?? '';
+      if (amountStr == null || dateStr == null) {
+        skipped++;
         continue;
       }
+      final amount = double.tryParse(amountStr);
+      if (amount == null) {
+        skipped++;
+        continue;
+      }
+      final date = _parseOfxDate(dateStr);
+      if (date == null) {
+        skipped++;
+        continue;
+      }
+      transactions.add(_buildTransaction(
+        accountId: accountId,
+        bankId: 'ofx',
+        date: date,
+        amountSigned: amount,
+        merchant: memo,
+        description: memo,
+        category: _categoryFromMerchant(memo),
+      ));
     }
-
-    // Пробуем стандартный парсинг
-    try {
-      return DateTime.parse(str);
-    } catch (e) {
-      return null;
-    }
+    return _ParsedRows(transactions, total, skipped);
   }
 
-  /// Парсинг суммы
-  static double _parseAmount(dynamic value) {
-    if (value == null) return 0;
+  static DateTime? _parseOfxDate(String raw) {
+    // YYYYMMDD или YYYYMMDDHHMMSS
+    if (raw.length < 8) return null;
+    final y = int.tryParse(raw.substring(0, 4));
+    final m = int.tryParse(raw.substring(4, 6));
+    final d = int.tryParse(raw.substring(6, 8));
+    if (y == null || m == null || d == null) return null;
+    int hh = 0, mm = 0, ss = 0;
+    if (raw.length >= 14) {
+      hh = int.tryParse(raw.substring(8, 10)) ?? 0;
+      mm = int.tryParse(raw.substring(10, 12)) ?? 0;
+      ss = int.tryParse(raw.substring(12, 14)) ?? 0;
+    }
+    return DateTime(y, m, d, hh, mm, ss);
+  }
 
-    var str = value.toString()
-        .replaceAll(' ', '')
-        .replaceAll(',', '.')
+  // ===== Row → Transaction =====
+
+  static Transaction? _rowToTransaction(
+    List<dynamic> row, {
+    required _BankMapping mapping,
+    required BankFormat bank,
+    required String accountId,
+  }) {
+    String? cell(int? idx) {
+      if (idx == null || idx < 0 || idx >= row.length) return null;
+      final v = row[idx];
+      return v?.toString().trim();
+    }
+
+    final dateStr = cell(mapping.dateIdx);
+    final amountStr = cell(mapping.amountIdx);
+    if (dateStr == null || amountStr == null) return null;
+
+    final date = _parseDate(dateStr);
+    final amount = _parseAmount(amountStr);
+    if (date == null || amount == 0) return null;
+
+    final description = cell(mapping.descriptionIdx) ?? '';
+    final category = cell(mapping.categoryIdx) ?? '';
+    final mcc = cell(mapping.mccIdx);
+    final cardMask = _extractCardMask(description);
+
+    return _buildTransaction(
+      accountId: accountId,
+      bankId: bank.id,
+      date: date,
+      amountSigned: amount,
+      merchant: description,
+      description: description,
+      category: _normalizeCategory(category, mcc, description),
+      cardMask: cardMask,
+    );
+  }
+
+  static Transaction _buildTransaction({
+    required String accountId,
+    required String bankId,
+    required DateTime date,
+    required double amountSigned,
+    required String description,
+    required String merchant,
+    required String category,
+    String? cardMask,
+  }) {
+    final type = amountSigned > 0 ? 'income' : 'expense';
+    final amountAbs = amountSigned.abs();
+    final fp = TransactionFingerprint.compute(
+      date: date,
+      amountSigned: amountSigned,
+      bankId: bankId,
+      merchant: merchant,
+      cardMask: cardMask,
+    );
+    return Transaction(
+      id: fp, // используем fingerprint как id для повторяемости
+      accountId: accountId,
+      amount: amountAbs,
+      type: type,
+      category: category,
+      description: description,
+      date: date,
+      merchantName: merchant.isEmpty ? null : merchant,
+      source: TransactionSource.statementImport,
+      bankId: bankId,
+      externalId: fp,
+      cardMask: cardMask,
+    );
+  }
+
+  // ===== Парсинг даты =====
+
+  static final List<DateFormat> _dateFormats = [
+    DateFormat('dd.MM.yyyy HH:mm:ss'),
+    DateFormat('dd.MM.yyyy HH:mm'),
+    DateFormat('dd.MM.yyyy'),
+    DateFormat('dd.MM.yy'),
+    DateFormat('dd/MM/yyyy HH:mm'),
+    DateFormat('dd/MM/yyyy'),
+    DateFormat('yyyy-MM-dd HH:mm:ss'),
+    DateFormat('yyyy-MM-dd HH:mm'),
+    DateFormat('yyyy-MM-dd'),
+    DateFormat('dd-MM-yyyy'),
+  ];
+
+  static DateTime? _parseDate(String raw) {
+    final str = raw.trim();
+    if (str.isEmpty) return null;
+
+    for (final f in _dateFormats) {
+      try {
+        return f.parseStrict(str);
+      } catch (_) {
+        // пробуем следующий
+      }
+    }
+    // Последний шанс — ISO
+    return DateTime.tryParse(str);
+  }
+
+  // ===== Парсинг суммы =====
+
+  static double _parseAmount(String raw) {
+    var str = raw
+        .replaceAll(RegExp(r'\s+'), '')
+        .replaceAll('\u00A0', '')
         .replaceAll('₽', '')
         .replaceAll('RUB', '')
-        .replaceAll('\$', '')
-        .replaceAll('€', '')
-        .trim();
+        .replaceAll(r'$', '')
+        .replaceAll('€', '');
 
+    // Если есть и запятая, и точка — последняя по позиции считается десятичным.
+    if (str.contains(',') && str.contains('.')) {
+      if (str.lastIndexOf(',') > str.lastIndexOf('.')) {
+        str = str.replaceAll('.', '').replaceAll(',', '.');
+      } else {
+        str = str.replaceAll(',', '');
+      }
+    } else {
+      str = str.replaceAll(',', '.');
+    }
     return double.tryParse(str) ?? 0;
   }
 
-  /// Проверка, является ли строка числом
-  static bool _isNumber(String str) {
-    final cleaned = str
-        .replaceAll(' ', '')
-        .replaceAll(',', '.')
-        .replaceAll('₽', '')
-        .replaceAll('RUB', '')
-        .replaceAll('\$', '')
-        .replaceAll('€', '');
-    
-    return double.tryParse(cleaned) != null;
+  // ===== Нормализация категории =====
+
+  static String _normalizeCategory(String raw, String? mcc, String description) {
+    if (mcc != null && mcc.isNotEmpty) {
+      final byMcc = _categoryByMcc(mcc);
+      if (byMcc != 'Другое') return byMcc;
+    }
+    if (raw.isNotEmpty) {
+      final mapped = _categoryFromText(raw);
+      if (mapped != 'Другое') return mapped;
+    }
+    return _categoryFromMerchant(description);
   }
 
-  /// Маппинг категорий из выписки
-  static String _mapCategory(String category, String? mcc) {
-    final lowerCategory = category.toLowerCase();
-
-    // По MCC коду
-    if (mcc != null) {
-      final mccCategory = _getCategoryByMcc(mcc);
-      if (mccCategory != 'Другое') return mccCategory;
-    }
-
-    // По названию категории
-    if (lowerCategory.contains('продукт') || 
-        lowerCategory.contains('grocery') ||
-        lowerCategory.contains('супермаркет') ||
-        lowerCategory.contains('магнит') ||
-        lowerCategory.contains('пятёрочк') ||
-        lowerCategory.contains('перекрёсток')) {
-      return 'Продукты';
-    }
-
-    if (lowerCategory.contains('ресторан') ||
-        lowerCategory.contains('кафе') ||
-        lowerCategory.contains('restaurant') ||
-        lowerCategory.contains('мcdonald') ||
-        lowerCategory.contains('burger')) {
-      return 'Рестораны';
-    }
-
-    if (lowerCategory.contains('транспорт') ||
-        lowerCategory.contains('метро') ||
-        lowerCategory.contains('автобус') ||
-        lowerCategory.contains('transport')) {
-      return 'Транспорт';
-    }
-
-    if (lowerCategory.contains('такси') ||
-        lowerCategory.contains('yandex') ||
-        lowerCategory.contains('uber') ||
-        lowerCategory.contains('ситимобил')) {
-      return 'Такси';
-    }
-
-    if (lowerCategory.contains('развлечен') ||
-        lowerCategory.contains('кино') ||
-        lowerCategory.contains('entertainment') ||
-        lowerCategory.contains('netflix')) {
-      return 'Развлечения';
-    }
-
-    if (lowerCategory.contains('здоров') ||
-        lowerCategory.contains('аптек') ||
-        lowerCategory.contains('медицин') ||
-        lowerCategory.contains('health') ||
-        lowerCategory.contains('pharmacy')) {
-      return 'Здоровье';
-    }
-
-    if (lowerCategory.contains('одежд') ||
-        lowerCategory.contains('clothing') ||
-        lowerCategory.contains('lamoda') ||
-        lowerCategory.contains('wildberrie')) {
-      return 'Одежда';
-    }
-
-    if (lowerCategory.contains('коммунал') ||
-        lowerCategory.contains('жилищн') ||
-        lowerCategory.contains('utilities')) {
-      return 'Коммунальные услуги';
-    }
-
-    if (lowerCategory.contains('связ') ||
-        lowerCategory.contains('интернет') ||
-        lowerCategory.contains('мобильн') ||
-        lowerCategory.contains('communication')) {
-      return 'Связь';
-    }
-
-    if (lowerCategory.contains('зарплат') ||
-        lowerCategory.contains('salary') ||
-        lowerCategory.contains('зачисление')) {
-      return 'Зарплата';
-    }
-
-    if (lowerCategory.contains('перевод') ||
-        lowerCategory.contains('transfer')) {
-      return 'Переводы';
-    }
-
+  static String _categoryByMcc(String mcc) {
+    final code = int.tryParse(mcc);
+    if (code == null) return 'Другое';
+    if (code >= 5411 && code <= 5499) return 'Продукты';
+    if (code >= 5811 && code <= 5814) return 'Рестораны';
+    if (code == 4111 || code == 4131) return 'Транспорт';
+    if (code == 4121) return 'Такси';
+    if (code >= 7922 && code <= 7999) return 'Развлечения';
+    if (code >= 5912 && code <= 5913) return 'Здоровье';
+    if (code >= 5611 && code <= 5699) return 'Одежда';
+    if (code >= 4900 && code <= 4999) return 'Коммуналка';
+    if (code == 4899 || code == 4814) return 'Связь';
+    if (code >= 8211 && code <= 8299) return 'Образование';
+    if (code >= 7011 && code <= 7012) return 'Отель';
     return 'Другое';
   }
 
-  /// Получение категории по MCC коду
-  static String _getCategoryByMcc(String mcc) {
-    final mccCode = int.tryParse(mcc);
-    if (mccCode == null) return 'Другое';
+  static String _categoryFromText(String raw) =>
+      _categoryFromMerchant(raw.toLowerCase());
 
-    if (mccCode >= 5411 && mccCode <= 5499) return 'Продукты';
-    if (mccCode >= 5811 && mccCode <= 5814) return 'Рестораны';
-    if (mccCode == 4111 || mccCode == 4131) return 'Транспорт';
-    if (mccCode == 4121) return 'Такси';
-    if (mccCode >= 7922 && mccCode <= 7999) return 'Развлечения';
-    if (mccCode >= 5912 && mccCode <= 5913) return 'Здоровье';
-    if (mccCode >= 5611 && mccCode <= 5699) return 'Одежда';
-    if (mccCode >= 4900 && mccCode <= 4999) return 'Коммунальные услуги';
-    if (mccCode == 4899 || mccCode == 4814) return 'Связь';
+  static String _categoryFromMerchant(String raw) {
+    final s = raw.toLowerCase();
+    bool any(List<String> patterns) => patterns.any(s.contains);
 
+    if (any(['продукт', 'магнит', 'пятёрочк', 'пятерочк', 'перекрёстк', 'перекрестк', 'ашан', 'лента', 'дикси', 'grocery', 'supermarket'])) return 'Продукты';
+    if (any(['ресторан', 'кафе', 'pizza', 'burger', 'mcdonald', 'kfc', 'starbucks', 'restaurant'])) return 'Рестораны';
+    if (any(['метро', 'автобус', 'троллейбус', 'трамвай', 'rzd', 'ржд'])) return 'Транспорт';
+    if (any(['такси', 'taxi', 'yandex go', 'uber', 'ситимобил', 'gett'])) return 'Такси';
+    if (any(['azs', 'азс', 'лукойл', 'газпром', 'роснефть', 'shell', 'bp '])) return 'Бензин';
+    if (any(['кино', 'cinema', 'netflix', 'okko', 'ivi', 'кинопоиск', 'spotify', 'youtube premium'])) return 'Развлечения';
+    if (any(['аптек', 'pharmacy', '36.6', 'ригла', 'озерки'])) return 'Аптека';
+    if (any(['клиника', 'медцентр', 'инвитро', 'гемотест', 'helix'])) return 'Здоровье';
+    if (any(['lamoda', 'wildberries', 'wb ', 'ozon', 'h&m', 'zara', 'uniqlo'])) return 'Одежда';
+    if (any(['жкх', 'коммунал', 'utilities', 'мосэнерго', 'водоканал'])) return 'Коммуналка';
+    if (any(['мегафон', 'мтс', 'билайн', 'beeline', 'tele2', 'yota', 'rostelecom'])) return 'Связь';
+    if (any(['зарплат', 'salary', 'аванс'])) return 'Зарплата';
+    if (any(['перевод', 'transfer', 'p2p', 'sbp'])) return 'Переводы';
+    if (any(['airbnb', 'отель', 'hotel', 'booking'])) return 'Отель';
+    if (any(['s7', 'аэрофлот', 'победа', 'utair', 'airlines'])) return 'Путешествия';
     return 'Другое';
   }
 
-  /// Получение инструкции по экспорту для банка
-  static String getExportInstructions(String bankId) {
-    switch (bankId) {
-      case 'tinkoff':
-        return '''
-Инструкция по экспорту из Тинькофф:
+  // Извлекает маску `*1234` или `**** 1234` из описания
+  static String? _extractCardMask(String description) {
+    final m = RegExp(r'(?:\*+|\.{2,})\s*(\d{4})').firstMatch(description);
+    return m?.group(1);
+  }
 
-1. Откройте приложение Тинькофф
-2. Перейдите в раздел "Платежи"
-3. Нажмите "Выписки"
-4. Выберите период
-5. Нажмите "Скачать" → "CSV"
-6. Загрузите полученный файл здесь
-        ''';
-      
-      case 'sber':
-        return '''
-Инструкция по экспорту из Сбербанк:
-
-1. Откройте приложение Сбербанк Онлайн
-2. Перейдите в "История операций"
-3. Выберите период
-4. Нажмите "Экспорт" → "CSV"
-5. Загрузите полученный файл здесь
-        ''';
-      
-      case 'alfa':
-        return '''
-Инструкция по экспорту из Альфа-Банк:
-
-1. Откройте приложение Альфа-Банк
-2. Перейдите в "История"
-3. Выберите период
-4. Нажмите "Экспорт" → "CSV"
-5. Загрузите полученный файл здесь
-        ''';
-      
-      case 'vtb':
-        return '''
-Инструкция по экспорту из ВТБ:
-
-1. Откройте приложение ВТБ Онлайн
-2. Перейдите в "Операции"
-3. Выберите период
-4. Нажмите "Экспорт" → "CSV"
-5. Загрузите полученный файл здесь
-        ''';
-      
-      default:
-        return 'Экспортируйте выписку из вашего банка в формате CSV и загрузите её здесь.';
-    }
+  static BankFormat _guessBankByExtension(String ext) {
+    if (ext == '.ofx' || ext == '.qfx') return SupportedBanks.byId('ofx');
+    return SupportedBanks.all.first;
   }
 }
 
-/// Результат импорта
-class ImportResult {
-  final bool success;
+class _ParsedRows {
+  const _ParsedRows(this.transactions, this.totalRows, this.skipped);
   final List<Transaction> transactions;
-  final String? error;
   final int totalRows;
-  final int importedRows;
-  final int skippedRows;
+  final int skipped;
+}
 
+class _BankMapping {
+  _BankMapping({
+    required this.dateIdx,
+    required this.amountIdx,
+    this.descriptionIdx,
+    this.categoryIdx,
+    this.mccIdx,
+  });
+
+  final int dateIdx;
+  final int amountIdx;
+  final int? descriptionIdx;
+  final int? categoryIdx;
+  final int? mccIdx;
+
+  /// Ищет колонки по заголовкам с учётом конкретного банка.
+  static _BankMapping fromHeaders(List<String> headers, BankFormat bank) {
+    int? find(List<String> names) {
+      for (int i = 0; i < headers.length; i++) {
+        final h = headers[i];
+        if (names.any((n) => h.contains(n))) return i;
+      }
+      return null;
+    }
+
+    final dateIdx = find([
+      'дата операции',
+      'дата проведения',
+      'дата платежа',
+      'дата',
+      'date',
+      'operation_date',
+    ]);
+    final amountIdx = find([
+      'сумма в валюте счёта',
+      'сумма в валюте счета',
+      'сумма операции',
+      'сумма платежа',
+      'сумма',
+      'amount',
+    ]);
+    final descriptionIdx = find([
+      'описание',
+      'назначение',
+      'детали',
+      'description',
+      'memo',
+      'name',
+      'название',
+    ]);
+    final categoryIdx = find(['категория', 'category']);
+    final mccIdx = find(['mcc', 'мсс']);
+
+    return _BankMapping(
+      dateIdx: dateIdx ?? 0,
+      amountIdx: amountIdx ?? 1,
+      descriptionIdx: descriptionIdx,
+      categoryIdx: categoryIdx,
+      mccIdx: mccIdx,
+    );
+  }
+}
+
+/// Результат импорта выписки.
+class ImportResult {
   ImportResult({
     required this.success,
     this.transactions = const [],
@@ -473,14 +628,17 @@ class ImportResult {
     this.totalRows = 0,
     this.importedRows = 0,
     this.skippedRows = 0,
+    this.bankId,
   });
-}
 
-/// Формат банковской выписки
-enum BankStatementFormat {
-  tinkoff,
-  sber,
-  alfa,
-  vtb,
-  universal,
+  factory ImportResult.failure(String message) =>
+      ImportResult(success: false, error: message);
+
+  final bool success;
+  final List<Transaction> transactions;
+  final String? error;
+  final int totalRows;
+  final int importedRows;
+  final int skippedRows;
+  final String? bankId;
 }

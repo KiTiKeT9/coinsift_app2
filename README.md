@@ -4,7 +4,7 @@
 
 **Современное мобильное приложение для управления личными финансами**
 
-Учёт расходов и доходов · Аналитика · Финансовые калькуляторы · Инвестиционный портфель
+Учёт расходов и доходов · Автоимпорт из SMS/push · Аналитика · Финансовые калькуляторы · Инвестиционный портфель
 
 [![Flutter](https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart-3.5%2B-0175C2?logo=dart&logoColor=white)](https://dart.dev)
@@ -22,7 +22,14 @@
 - **Транзакции** — добавление доходов и расходов с богатым списком категорий (Продукты, Транспорт, Здоровье, Развлечения, Шоппинг и др.)
 - **Smart-категоризация** — каждая категория имеет иконку и цвет для быстрого визуального восприятия
 
-### 📈 Аналитика
+### � Автоимпорт из SMS и push-уведомлений
+- **SMS-листенер** (`SmsListenerService`) — фоновое чтение банковских SMS с разрешением `RECEIVE_SMS` / `READ_SMS`
+- **Парсер банковских сообщений** (`SmsParser`) — извлекает сумму, валюту, merchant, тип операции из форматов Сбер, Т-Банк, ВТБ, Альфа, Газпромбанк и др.
+- **Push-листенер** (`PushListenerService`) — импорт через `NotificationListenerService` для банков, которые приходят только в виде push
+- **Дедупликация** (`TransactionDeduplicator`) — fuzzy-сличение по сумме / времени / merchant, чтобы одна операция из SMS + push не создавала дубль
+- **Черновики** (`@/lib/screens/drafts_screen.dart`) — распознанные транзакции попадают в очередь на подтверждение, пользователь решает, сохранять или игнорировать
+
+### �📈 Аналитика
 - **Круговая диаграмма расходов и доходов** с переключателем `SegmentedButton`
 - **Карточки доходов/расходов** с цветными акцентами
 - **Легенда категорий** — топ-4 категории с распределением сумм
@@ -35,9 +42,12 @@
 - **Сравнение банков** — публичные ставки нескольких банков с подсветкой лучшего предложения и подгрузкой логотипов через [Clearbit Logo API](https://clearbit.com/logo)
 
 ### 💼 Инвестиции
-- **Портфель** — отслеживание акций, облигаций, ETF
-- **Каталог инструментов** — поиск и фильтрация по типу (Все/Акции/Облигации/ETF)
-- **Логотипы эмитентов** — автоматическая подгрузка из публичного CDN Тинькофф
+- **Портфель** — отслеживание акций, облигаций, ETF с автоматическим обновлением цен
+- **Каталог инструментов** с живыми ценами и изменением за день через **MOEX ISS API** (batch-endpoint — один HTTP для всех тикеров)
+- **Офлайн-кеш каталога** в Hive — список инструментов и последние цены доступны, даже если MOEX недоступен
+- **Sparkline 30D** в диалоге добавления актива — график цены закрытия по свечам `iss.moex.com/.../candles.json`
+- **Логотипы эмитентов** с **персистентным кешем в Hive** (`LogoCacheService`) — магия-байты защищают от HTML-заглушек, таймауты не помечают URL как битый
+- **Безопасное удаление** — swipe-to-delete или явная кнопка-корзина с диалогом подтверждения
 - **Прибыль/убыток** — расчёт в абсолютном выражении и в процентах
 
 ### 🔐 Безопасность
@@ -72,6 +82,8 @@
 | **UI-помощники** | [shimmer](https://pub.dev/packages/shimmer) · [google_fonts](https://pub.dev/packages/google_fonts) · [flutter_svg](https://pub.dev/packages/flutter_svg) |
 | **Сеть** | [http](https://pub.dev/packages/http) · [dio](https://pub.dev/packages/dio) |
 | **OAuth/банки** | [webview_flutter](https://pub.dev/packages/webview_flutter) · [url_launcher](https://pub.dev/packages/url_launcher) |
+| **Автоимпорт** | `telephony` (SMS), `notification_listener_service` (push), кастомные парсеры и дедупликатор |
+| **Маркетдата** | [MOEX ISS API](https://iss.moex.com) (акции РФ), Yahoo Finance (зарубежные), Open Exchange Rates (валюты) |
 | **Утилиты** | [intl](https://pub.dev/packages/intl) · [uuid](https://pub.dev/packages/uuid) · [crypto](https://pub.dev/packages/crypto) |
 
 ---
@@ -84,6 +96,12 @@ lib/
 ├── models/                    # Hive-модели: Account, Transaction, UserProfile, Investment, ...
 ├── providers/                 # ChangeNotifier-провайдеры (accounts, transactions, profile, ...)
 ├── services/                  # Бизнес-логика: Database, Security, Banks API, OAuth, ...
+│   ├── sms_listener_service.dart       # Фоновое чтение банковских SMS
+│   ├── sms_parser.dart                 # Парсер сумм/мерчантов из банковских сообщений
+│   ├── push_listener_service.dart      # Импорт транзакций из push-уведомлений
+│   ├── transaction_deduplicator.dart   # Fuzzy-дедупликация (SMS ∪ push)
+│   ├── investment_api_service.dart     # MOEX/Yahoo + Hive-кеш каталога и свечей
+│   └── logo_cache_service.dart         # Постоянный кеш иконок банков и эмитентов
 ├── screens/                   # Экраны UI
 │   ├── home_screen.dart       # Главный + Material 3 NavigationBar с glassmorphism
 │   ├── accounts_screen.dart   # Список счетов
@@ -93,6 +111,7 @@ lib/
 │   ├── profile_screen.dart    # Настройки, тема, PIN, кастомный фон
 │   ├── pin_lock_screen.dart   # PIN с прогрессивной блокировкой
 │   ├── bank_*_screen.dart     # Интеграция с банками
+│   ├── drafts_screen.dart     # Очередь черновиков из SMS/push на подтверждение
 │   └── ...
 ├── widgets/                   # Переиспользуемые виджеты
 │   ├── account_card.dart      # Карточка счёта с динамическим градиентом по color
@@ -158,6 +177,10 @@ flutter build ios            # Сборка под iOS (нужен macOS)
 
 ## 📋 Дорожная карта
 
+- [x] Автоимпорт транзакций из SMS и push-уведомлений
+- [x] Fuzzy-дедупликация SMS ∪ push (юнит-покрытие в `test/transaction_deduplicator_test.dart`)
+- [x] Постоянный Hive-кеш логотипов и каталога инвестиций (офлайн-first)
+- [x] Sparkline-график по акциям (MOEX candles)
 - [ ] Миграция на `go_router` для deep links и OAuth-callback
 - [ ] Dynamic Color (Material You) — `dynamic_color` package, темы из обоев на Android 12+
 - [ ] Биометрическая аутентификация (`local_auth`) как альтернатива PIN

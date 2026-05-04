@@ -74,7 +74,7 @@ class InvestmentsProvider with ChangeNotifier {
     return sorted;
   }
 
-  Future<void> loadInvestments() async {
+  Future<void> loadInvestments({bool refreshPrices = true}) async {
     _isLoading = true;
     notifyListeners();
 
@@ -82,6 +82,14 @@ class InvestmentsProvider with ChangeNotifier {
 
     _isLoading = false;
     notifyListeners();
+
+    // Тянем актуальные цены в фоне — пользователю не нужно дёргать
+    // pull-to-refresh, чтобы portfolio summary перестал показывать
+    // цены покупки вместо рыночных.
+    if (refreshPrices && _investments.isNotEmpty) {
+      // ignore: unawaited_futures
+      updatePrices();
+    }
   }
 
   Future<void> addInvestment({
@@ -140,7 +148,12 @@ class InvestmentsProvider with ChangeNotifier {
     }
   }
 
-  /// Обновление цен с использованием реальных данных из API
+  /// Обновление цен с использованием реальных данных из API.
+  ///
+  /// Тянет цены одним batch-запросом MOEX (`getMoexBoardPrices`) — это
+  /// надёжнее, чем точечные `getMoexPrice` по каждому тикеру, которые
+  /// на медленной сети любят таймаутить. Для зарубежных тикеров
+  /// добиваем точечно через Yahoo Finance.
   Future<void> updatePrices() async {
     if (_investments.isEmpty) return;
 
@@ -148,45 +161,57 @@ class InvestmentsProvider with ChangeNotifier {
     _lastUpdateError = null;
     notifyListeners();
 
+    int updatedCount = 0;
+    int failedCount = 0;
+
     try {
-      int updatedCount = 0;
-      int failedCount = 0;
+      final ruTickers = _investments
+          .where((i) => InvestmentApiService.isRussianTicker(i.ticker))
+          .toList();
+      final foreignTickers = _investments
+          .where((i) => !InvestmentApiService.isRussianTicker(i.ticker))
+          .toList();
 
-      for (var investment in _investments) {
+      Map<String, double> ruPrices = const {};
+      if (ruTickers.isNotEmpty) {
+        ruPrices = await InvestmentApiService.getMoexBoardPrices();
+      }
+
+      for (final inv in ruTickers) {
+        final price = ruPrices[inv.ticker.toUpperCase()];
+        if (price != null && price > 0) {
+          inv.currentPrice = price;
+          await _db.updateInvestment(inv);
+          updatedCount++;
+        } else {
+          failedCount++;
+        }
+      }
+
+      for (final inv in foreignTickers) {
         try {
-          double? newPrice;
-
-          // Определяем, какой API использовать
-          if (InvestmentApiService.isRussianTicker(investment.ticker)) {
-            // Для российских акций используем MOEX
-            newPrice = await InvestmentApiService.getMoexPrice(investment.ticker);
-          } else {
-            // Для зарубежных акций можно использовать другие API
-            // Пока оставляем заглушку или используем текущую цену
-            newPrice = null;
-          }
-
-          if (newPrice != null && newPrice > 0) {
-            investment.currentPrice = newPrice;
-            await _db.updateInvestment(investment);
+          final data =
+              await InvestmentApiService.getForeignStockPrice(inv.ticker);
+          final price = data?['price'];
+          if (price is num && price > 0) {
+            inv.currentPrice = price.toDouble();
+            await _db.updateInvestment(inv);
             updatedCount++;
           } else {
             failedCount++;
           }
         } catch (e) {
           failedCount++;
-          debugPrint('Ошибка обновления цены для ${investment.ticker}: $e');
+          debugPrint('Ошибка обновления цены для ${inv.ticker}: $e');
         }
       }
 
       _lastUpdateError = failedCount > 0
           ? 'Обновлено: $updatedCount, ошибок: $failedCount'
           : null;
-
-      _isUpdatingPrices = false;
-      notifyListeners();
     } catch (e) {
       _lastUpdateError = 'Ошибка обновления цен: $e';
+    } finally {
       _isUpdatingPrices = false;
       notifyListeners();
     }

@@ -8,6 +8,7 @@ import '../models/investment_instrument.dart';
 import '../services/investment_api_service.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_utils.dart';
+import '../widgets/cached_logo_image.dart';
 
 class InvestmentsScreen extends StatefulWidget {
   const InvestmentsScreen({super.key});
@@ -399,40 +400,243 @@ class _CatalogTabState extends State<CatalogTab> {
   }
 
   void _showAddDialog(BuildContext context, InvestmentInstrument instrument) {
-    final qtyController = TextEditingController(text: '1');
-    final priceController = TextEditingController(text: instrument.price?.toString() ?? '0');
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Добавить ${instrument.ticker}'),
-        content: Column(
+      builder: (_) => _AddInstrumentDialog(instrument: instrument),
+    );
+  }
+}
+
+/// Диалог добавления актива в портфель.
+///
+/// При открытии параллельно подтягивает актуальный курс через
+/// `MOEX` и 30-дневный sparkline. Пока запрос идёт, поле «Цена
+/// покупки» пустое, а график рисует placeholder. Это устраняет
+/// проблему «₽0 в карточке» и даёт пользователю наглядный график.
+class _AddInstrumentDialog extends StatefulWidget {
+  const _AddInstrumentDialog({required this.instrument});
+  final InvestmentInstrument instrument;
+
+  @override
+  State<_AddInstrumentDialog> createState() => _AddInstrumentDialogState();
+}
+
+class _AddInstrumentDialogState extends State<_AddInstrumentDialog> {
+  late final TextEditingController _qtyController;
+  late final TextEditingController _priceController;
+  double? _livePrice;
+  List<double> _candles = const [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _qtyController = TextEditingController(text: '1');
+    final initial = widget.instrument.price;
+    _priceController = TextEditingController(
+      text: initial != null && initial > 0 ? initial.toStringAsFixed(2) : '',
+    );
+    _loadMarketData();
+  }
+
+  Future<void> _loadMarketData() async {
+    final ticker = widget.instrument.ticker;
+    final results = await Future.wait([
+      InvestmentApiService.getMoexPrice(ticker),
+      InvestmentApiService.getCandles(ticker),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _livePrice = results[0] as double?;
+      _candles = results[1] as List<double>;
+      _loading = false;
+      if (_livePrice != null && _priceController.text.isEmpty) {
+        _priceController.text = _livePrice!.toStringAsFixed(2);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _qtyController.dispose();
+    _priceController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final i = widget.instrument;
+    return AlertDialog(
+      title: Text('Добавить ${i.ticker}'),
+      // AlertDialog.content оборачивает детей в IntrinsicWidth, а
+      // LineChart внутри использует LayoutBuilder, который не умеет
+      // считать intrinsic-размеры — без явной ширины это роняет
+      // диалог. Даём SizedBox с фиксированной шириной, чтобы отрезать
+      // intrinsic-проход.
+      content: SizedBox(
+        width: MediaQuery.of(context).size.width * 0.85,
+        child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(controller: qtyController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Количество')),
-            TextField(controller: priceController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Цена покупки', prefixText: '₽ ')),
+            Text(i.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Builder(builder: (_) {
+                  final shown = _livePrice ?? widget.instrument.price;
+                  if (shown != null) {
+                    return Text(
+                      'Текущий курс: ₽${shown.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 13,
+                      ),
+                    );
+                  }
+                  return Text(
+                    _loading ? 'Загружаем курс…' : 'Курс недоступен',
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 13,
+                    ),
+                  );
+                }),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _SparklineChart(values: _candles, loading: _loading),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _qtyController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Количество'),
+            ),
+            TextField(
+              controller: _priceController,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Цена покупки',
+                prefixText: '₽ ',
+              ),
+            ),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
-          ElevatedButton(
-            onPressed: () {
-              final qty = int.tryParse(qtyController.text) ?? 0;
-              final price = double.tryParse(priceController.text) ?? 0;
-              if (qty > 0 && price > 0) {
-                context.read<InvestmentsProvider>().addInvestment(
-                  name: instrument.name,
-                  ticker: instrument.ticker,
-                  type: instrument.type,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Отмена'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            final qty = int.tryParse(_qtyController.text) ?? 0;
+            final price = double.tryParse(_priceController.text) ?? 0;
+            if (qty <= 0 || price <= 0) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Введите количество и цену больше нуля'),
+                ),
+              );
+              return;
+            }
+            context.read<InvestmentsProvider>().addInvestment(
+                  name: i.name,
+                  ticker: i.ticker,
+                  type: i.type,
                   quantity: qty,
                   averagePrice: price,
-                  currentPrice: instrument.price ?? price,
+                  currentPrice: _livePrice ?? i.price ?? price,
                 );
-                Navigator.pop(context);
-              }
-            },
-            child: const Text('Добавить'),
-          ),
-        ],
+            Navigator.pop(context);
+          },
+          child: const Text('Добавить'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Простой sparkline-график без осей и подписей.
+/// Рисуем линию + полупрозрачную заливку под ней.
+class _SparklineChart extends StatelessWidget {
+  const _SparklineChart({required this.values, required this.loading});
+  final List<double> values;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) {
+      return Container(
+        height: 80,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppColors.primary.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+    if (values.length < 2) {
+      return Container(
+        height: 80,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppColors.primary.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Text(
+          'График недоступен',
+          style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+        ),
+      );
+    }
+
+    final isUp = values.last >= values.first;
+    final color = isUp ? AppColors.success : AppColors.error;
+    final spots = <FlSpot>[
+      for (int i = 0; i < values.length; i++) FlSpot(i.toDouble(), values[i]),
+    ];
+    var minY = values.reduce((a, b) => a < b ? a : b);
+    var maxY = values.reduce((a, b) => a > b ? a : b);
+    if (minY == maxY) {
+      // Плоская линия: fl_chart падает при нулевом диапазоне по Y.
+      final pad = minY.abs() * 0.01 + 1;
+      minY -= pad;
+      maxY += pad;
+    }
+
+    return SizedBox(
+      height: 80,
+      child: LineChart(
+        LineChartData(
+          minY: minY,
+          maxY: maxY,
+          titlesData: const FlTitlesData(show: false),
+          gridData: const FlGridData(show: false),
+          borderData: FlBorderData(show: false),
+          lineTouchData: const LineTouchData(enabled: false),
+          lineBarsData: [
+            LineChartBarData(
+              spots: spots,
+              isCurved: true,
+              color: color,
+              barWidth: 2,
+              dotData: const FlDotData(show: false),
+              belowBarData: BarAreaData(
+                show: true,
+                color: color.withValues(alpha: 0.18),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -450,47 +654,115 @@ class _InvestmentTile extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final isPositive = investment.profitLoss >= 0;
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isDark ? AppColors.darkSurface : Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.03)),
+    return Dismissible(
+      key: ValueKey(investment.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        alignment: Alignment.centerRight,
+        decoration: BoxDecoration(
+          color: AppColors.error.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: const Icon(Icons.delete_rounded, color: AppColors.error),
       ),
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: onDelete,
-        child: Row(
-          children: [
-            _AssetLogo(
-              ticker: investment.ticker,
-              fallbackEmoji: investment.ticker.substring(0, 1),
-              size: 48,
-              radius: 12,
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      confirmDismiss: (_) => _confirmDelete(context),
+      onDismissed: (_) => onDelete(),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isDark ? AppColors.darkSurface : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.05)
+                  : Colors.black.withValues(alpha: 0.03)),
+        ),
+        child: InkWell(
+          onTap: onTap,
+          child: Row(
+            children: [
+              _AssetLogo(
+                ticker: investment.ticker,
+                fallbackEmoji: investment.ticker.substring(0, 1),
+                size: 48,
+                radius: 12,
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(investment.name,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 15),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                    Text(
+                        '${investment.quantity} шт • ₽${investment.currentPrice}',
+                        style: const TextStyle(
+                            color: AppColors.textSecondary, fontSize: 12)),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(investment.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15), maxLines: 1, overflow: TextOverflow.ellipsis),
-                  Text('${investment.quantity} шт • ₽${investment.currentPrice}', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                  Text(AppUtils.formatCurrency(investment.totalValue),
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 15)),
+                  Text(
+                    '${isPositive ? '+' : ''}${investment.profitLossPercent.toStringAsFixed(2)}%',
+                    style: TextStyle(
+                        color: isPositive
+                            ? AppColors.success
+                            : AppColors.error,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold),
+                  ),
                 ],
               ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(AppUtils.formatCurrency(investment.totalValue), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                Text(
-                  '${isPositive ? '+' : ''}${investment.profitLossPercent.toStringAsFixed(2)}%',
-                  style: TextStyle(color: isPositive ? AppColors.success : AppColors.error, fontSize: 12, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-          ],
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: 'Удалить актив',
+                icon: const Icon(Icons.delete_outline_rounded,
+                    color: AppColors.error),
+                onPressed: () async {
+                  final ok = await _confirmDelete(context);
+                  if (ok == true) onDelete();
+                },
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+
+  Future<bool?> _confirmDelete(BuildContext context) {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Удалить актив?'),
+        content: Text(
+            'Вы действительно хотите удалить ${investment.name} (${investment.ticker}) из портфеля?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Отмена'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Удалить'),
+          ),
+        ],
       ),
     );
   }
@@ -503,6 +775,11 @@ class _InstrumentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final price = instrument.price;
+    final changePct = instrument.dayChangePercent;
+    final hasChange = changePct != null && changePct != 0;
+    final isUp = (changePct ?? 0) >= 0;
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: ListTile(
@@ -511,9 +788,62 @@ class _InstrumentCard extends StatelessWidget {
           ticker: instrument.ticker,
           fallbackEmoji: instrument.typeEmoji,
         ),
-        title: Text(instrument.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+        title: Text(
+          instrument.name,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         subtitle: Text(instrument.ticker),
-        trailing: Text('₽${instrument.price?.toStringAsFixed(2) ?? '0'}', style: const TextStyle(fontWeight: FontWeight.bold)),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  price != null
+                      ? '₽${price.toStringAsFixed(2)}'
+                      : 'Курс…',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: price != null
+                        ? null
+                        : AppColors.textSecondary,
+                  ),
+                ),
+                if (hasChange)
+                  Text(
+                    '${isUp ? '+' : ''}${changePct.toStringAsFixed(2)}%',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: isUp ? AppColors.success : AppColors.error,
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: 'Добавить в портфель',
+              onPressed: onAdd,
+              icon: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.add_rounded,
+                  size: 20,
+                  color: AppColors.primary,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -554,19 +884,12 @@ class _AssetLogo extends StatelessWidget {
       ),
     );
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
-      child: Image.network(
-        _logoUrl,
-        width: size,
-        height: size,
-        fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => placeholder,
-        loadingBuilder: (context, child, progress) {
-          if (progress == null) return child;
-          return placeholder;
-        },
-      ),
+    return CachedLogoImage(
+      url: _logoUrl,
+      placeholder: placeholder,
+      size: size,
+      radius: radius,
+      fit: BoxFit.cover,
     );
   }
 }

@@ -50,6 +50,16 @@ dependencies:
   cupertino_icons: ^1.0.8
   google_fonts: ^6.1.0
 
+  # Импорт банковских выписок
+  excel: ^4.0.6                     # парсер .xlsx/.xls
+  permission_handler: ^11.3.0       # рантайм-разрешения (SMS, notifications)
+
+  # SMS-парсинг банковских уведомлений (Android)
+  another_telephony: ^0.4.1         # чтение входящих SMS
+
+  # Push-парсинг банковских уведомлений (Android)
+  notification_listener_service: ^0.3.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

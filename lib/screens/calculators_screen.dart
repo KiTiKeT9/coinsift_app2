@@ -336,7 +336,7 @@ class _MortgageCalculatorState extends State<MortgageCalculator> {
     final result = _calculateMortgage();
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -632,7 +632,7 @@ class _DepositCalculatorState extends State<DepositCalculator> {
     final result = _calculateDeposit();
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -869,7 +869,7 @@ class _LoanCalculatorState extends State<LoanCalculator> {
     final result = _calculateLoan();
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
