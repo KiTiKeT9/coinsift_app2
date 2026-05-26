@@ -217,8 +217,8 @@ class TinkoffApiService {
     return 'https://www.tinkoff.ru/invest/open-api/auth/?'
         'client_id=$clientId'
         '&response_type=code'
-        '&redirect_uri=coinsift://tinkoff-callback'
-        '&state=coinsift_tinkoff_auth';
+        '&redirect_uri=monetka://tinkoff-callback'
+        '&state=monetka_tinkoff_auth';
   }
 
   /// Обработка callback с кодом авторизации

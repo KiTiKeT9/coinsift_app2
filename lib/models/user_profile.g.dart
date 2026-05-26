@@ -30,13 +30,15 @@ class UserProfileAdapter extends TypeAdapter<UserProfile> {
       enablePinLock: fields[10] as bool,
       customBackgroundPath: fields[11] as String?,
       useCustomBackground: fields[12] as bool,
+      useDynamicColor: fields[13] as bool? ?? true,
+      displayCurrency: fields[14] as String? ?? 'RUB',
     );
   }
 
   @override
   void write(BinaryWriter writer, UserProfile obj) {
     writer
-      ..writeByte(13)
+      ..writeByte(15)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -62,7 +64,11 @@ class UserProfileAdapter extends TypeAdapter<UserProfile> {
       ..writeByte(11)
       ..write(obj.customBackgroundPath)
       ..writeByte(12)
-      ..write(obj.useCustomBackground);
+      ..write(obj.useCustomBackground)
+      ..writeByte(13)
+      ..write(obj.useDynamicColor)
+      ..writeByte(14)
+      ..write(obj.displayCurrency);
   }
 
   @override

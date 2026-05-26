@@ -1,5 +1,5 @@
 name: coinsift_app
-description: "Финансовое приложение с анализом расходов, калькуляторами и инвестициями"
+description: "Монетка — финансовое приложение с анализом расходов, калькуляторами и инвестициями"
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -9,50 +9,55 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
   # State Management
   provider: ^6.1.1
-  flutter_bloc: ^8.1.3
+  flutter_bloc: ^9.1.1
 
   # Local Database
   hive: ^2.2.3
   hive_flutter: ^1.1.0
   path_provider: ^2.1.2
-  flutter_secure_storage: ^9.2.4
+  flutter_secure_storage: ^10.1.0
 
   # UI & Animations
-  fl_chart: ^0.66.0
-  animate_do: ^3.1.2
+  fl_chart: ^1.2.0
+  animate_do: ^5.1.0
   lottie: ^3.0.0
   shimmer: ^3.0.0
   flutter_animate: ^4.3.0
 
   # Utils
-  intl: ^0.19.0
+  intl: ^0.20.2
   uuid: ^4.3.3
   shared_preferences: ^2.2.2
   image_picker: ^1.0.7
   flutter_svg: ^2.0.9
   http: ^1.2.0
   file_selector: ^1.0.3
-  csv: ^6.0.0
+  csv: ^8.0.0
   path: ^1.9.0
   url_launcher: ^6.2.5
   webview_flutter: ^4.8.0
   crypto: ^3.0.3
 
   # Charts
-  syncfusion_flutter_charts: ^24.2.3
+  syncfusion_flutter_charts: ^33.2.5
   percent_indicator: ^4.2.3
 
   # Forms & Validation
-  flutter_form_builder: ^9.2.1
+  flutter_form_builder: ^10.3.0+2
 
   cupertino_icons: ^1.0.8
-  google_fonts: ^6.1.0
+  google_fonts: ^8.1.0
+
+  # Dynamic Color (Material You)
+  dynamic_color: ^1.7.0
 
   # Импорт банковских выписок
   excel: ^4.0.6                     # парсер .xlsx/.xls
-  permission_handler: ^11.3.0       # рантайм-разрешения (SMS, notifications)
+  permission_handler: ^12.0.1       # рантайм-разрешения (SMS, notifications)
 
   # SMS-парсинг банковских уведомлений (Android)
   another_telephony: ^0.4.1         # чтение входящих SMS
@@ -63,7 +68,7 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^4.0.0
+  flutter_lints: ^6.0.0
   hive_generator: ^2.0.1
   build_runner: ^2.4.8
 

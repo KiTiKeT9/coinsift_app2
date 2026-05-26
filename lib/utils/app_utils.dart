@@ -1,15 +1,15 @@
 import 'package:intl/intl.dart';
 
 class AppUtils {
-  static final NumberFormat _currencyFormat = NumberFormat.currency(
+  static NumberFormat _currencyFormat(String symbol) => NumberFormat.currency(
     locale: 'ru_RU',
-    symbol: '₽',
+    symbol: symbol,
     decimalDigits: 2,
   );
 
-  static final NumberFormat _compactCurrencyFormat = NumberFormat.compactCurrency(
+  static NumberFormat _compactCurrencyFormat(String symbol) => NumberFormat.compactCurrency(
     locale: 'ru_RU',
-    symbol: '₽',
+    symbol: symbol,
     decimalDigits: 1,
   );
 
@@ -19,14 +19,29 @@ class AppUtils {
   static final DateFormat _shortMonthFormat = DateFormat('MMM', 'ru_RU');
 
   static String formatCurrency(double amount, {String currency = 'RUB'}) {
-    if (currency == 'RUB') {
-      return _currencyFormat.format(amount);
-    }
-    return NumberFormat.currency(locale: 'ru_RU', symbol: getCurrencySymbol(currency)).format(amount);
+    final symbol = getCurrencySymbol(currency);
+    return _currencyFormat(symbol).format(amount);
   }
 
-  static String formatCompactCurrency(double amount) {
-    return _compactCurrencyFormat.format(amount);
+  static String formatCompactCurrency(double amount, {String currency = 'RUB'}) {
+    final symbol = getCurrencySymbol(currency);
+    return _compactCurrencyFormat(symbol).format(amount);
+  }
+
+  static double convertAmount(double amount, String from, String to, List<dynamic>? rates) {
+    if (from == to || rates == null || rates.isEmpty) return amount;
+    final fromRate = _findRate(from, rates);
+    final toRate = _findRate(to, rates);
+    if (fromRate == null || toRate == null) return amount;
+    return amount / fromRate * toRate;
+  }
+
+  static double? _findRate(String currency, List<dynamic> rates) {
+    if (currency == 'USD') return 1.0;
+    for (final r in rates) {
+      if (r is Map<String, dynamic> && r['currency'] == currency) return (r['rate'] as num).toDouble();
+    }
+    return null;
   }
 
   static String formatDate(DateTime date) {

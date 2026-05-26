@@ -89,17 +89,22 @@ class AppColors {
 }
 
 class AppTheme {
-  static ThemeData _build(Brightness brightness) {
+  static ThemeData _build(Brightness brightness, {ColorScheme? dynamicColorScheme}) {
     final isDark = brightness == Brightness.dark;
 
-    final scheme = ColorScheme.fromSeed(
-      seedColor: AppColors.primary,
-      brightness: brightness,
-      primary: AppColors.primary,
-      secondary: AppColors.secondary,
-      error: AppColors.error,
-      surface: isDark ? AppColors.darkSurface : AppColors.surface,
-    );
+    final ColorScheme scheme;
+    if (dynamicColorScheme != null) {
+      scheme = dynamicColorScheme;
+    } else {
+      scheme = ColorScheme.fromSeed(
+        seedColor: AppColors.primary,
+        brightness: brightness,
+        primary: AppColors.primary,
+        secondary: AppColors.secondary,
+        error: AppColors.error,
+        surface: isDark ? AppColors.darkSurface : AppColors.surface,
+      );
+    }
 
     final baseText = GoogleFonts.interTextTheme(
       isDark ? ThemeData.dark().textTheme : ThemeData.light().textTheme,
@@ -328,7 +333,7 @@ class AppTheme {
     );
   }
 
-  static ThemeData lightTheme = _build(Brightness.light);
-  static ThemeData darkTheme = _build(Brightness.dark);
+  static ThemeData lightTheme({ColorScheme? dynamicColorScheme}) => _build(Brightness.light, dynamicColorScheme: dynamicColorScheme);
+  static ThemeData darkTheme({ColorScheme? dynamicColorScheme}) => _build(Brightness.dark, dynamicColorScheme: dynamicColorScheme);
 }
 

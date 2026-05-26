@@ -12,6 +12,16 @@ class TransactionsProvider with ChangeNotifier {
   List<Transaction> _transactions = [];
   bool _isLoading = false;
 
+  double _monthlyBudget = 0;
+  double _currentMonthExpenses = 0;
+  bool _budgetExceeded = false;
+  bool _budgetWarningShown = false;
+
+  double get monthlyBudget => _monthlyBudget;
+  double get currentMonthExpenses => _currentMonthExpenses;
+  bool get budgetExceeded => _budgetExceeded;
+  bool get budgetWarningShown => _budgetWarningShown;
+
   /// Все транзакции, включая черновики из SMS/push.
   List<Transaction> get transactions => _transactions;
 
@@ -80,7 +90,40 @@ class TransactionsProvider with ChangeNotifier {
 
     _transactions = _db.allTransactions;
 
+    _checkBudget();
+
     _isLoading = false;
+    notifyListeners();
+  }
+
+  void _checkBudget() {
+    final now = DateTime.now();
+    final startOfMonth = DateTime(now.year, now.month, 1);
+    final endOfMonth = DateTime(now.year, now.month + 1, 0, 23, 59, 59);
+
+    _currentMonthExpenses = confirmed
+        .where((t) =>
+            t.type == 'expense' &&
+            t.date.isAfter(startOfMonth.subtract(const Duration(days: 1))) &&
+            t.date.isBefore(endOfMonth.add(const Duration(days: 1))))
+        .fold(0, (sum, t) => sum + t.amount);
+
+    _monthlyBudget = _db.userProfile?.monthlyBudget ?? 0;
+
+    if (_monthlyBudget > 0) {
+      final wasExceeded = _budgetExceeded;
+      _budgetExceeded = _currentMonthExpenses > _monthlyBudget;
+
+      if (_budgetExceeded && !wasExceeded) {
+        _budgetWarningShown = false;
+      }
+    } else {
+      _budgetExceeded = false;
+    }
+  }
+
+  void dismissBudgetWarning() {
+    _budgetWarningShown = true;
     notifyListeners();
   }
 

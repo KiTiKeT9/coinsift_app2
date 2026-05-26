@@ -1,6 +1,6 @@
 <div align="center">
 
-# 💰 CoinSift
+# 💰 Монетка
 
 **Современное мобильное приложение для управления личными финансами**
 
@@ -137,8 +137,8 @@ lib/
 
 ### Установка
 ```bash
-git clone https://github.com/<ваш-логин>/coinsift_app.git
-cd coinsift_app
+git clone https://github.com/<ваш-логин>/monetka_app.git
+cd monetka_app
 flutter pub get
 flutter run
 ```

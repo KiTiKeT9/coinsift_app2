@@ -15,7 +15,7 @@ class ApiConfig {
   static const String BELINK_API_URL = 'https://sandbox-api.belink.ru/v1';
   
   /// Redirect URI (должен совпадать с настройками в Belink)
-  static const String BELINK_REDIRECT_URI = 'coinsift://belink-callback';
+  static const String BELINK_REDIRECT_URI = 'monetka://belink-callback';
   
   /// Режим sandbox (true для тестирования, false для production)
   static const bool BELINK_USE_SANDBOX = true;

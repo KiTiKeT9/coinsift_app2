@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/accounts_provider.dart';
+import '../providers/user_profile_provider.dart';
 import '../models/account.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_utils.dart';
@@ -22,8 +23,9 @@ class AccountsScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: Consumer<AccountsProvider>(
-        builder: (context, provider, _) {
+      body: Consumer2<AccountsProvider, UserProfileProvider>(
+        builder: (context, provider, profileProvider, _) {
+          final displayCurrency = profileProvider.displayCurrency;
           if (provider.isLoading) {
             return const Center(child: CircularProgressIndicator());
           }
@@ -88,7 +90,7 @@ class AccountsScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            AppUtils.formatCurrency(provider.totalBalance),
+                            AppUtils.formatCurrency(provider.getConvertedBalance(displayCurrency), currency: displayCurrency),
                             style: TextStyle(
                               fontSize: 32,
                               fontWeight: FontWeight.bold,

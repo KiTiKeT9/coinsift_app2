@@ -29,47 +29,27 @@ class TransactionList extends StatelessWidget {
     }
 
     if (transactions.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 28),
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    AppColors.primary.withValues(alpha: 0.16),
-                    AppColors.primary.withValues(alpha: 0.04),
-                  ],
-                ),
-                shape: BoxShape.circle,
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Icon(Icons.receipt_long_rounded, size: 40, color: AppColors.primary),
+              SizedBox(height: 16),
+              Text(
+                'Пока нет операций',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
               ),
-              child: const Icon(
-                Icons.receipt_long_rounded,
-                size: 40,
-                color: AppColors.primary,
+              SizedBox(height: 6),
+              Text(
+                'Добавьте первую транзакцию,\nчтобы увидеть аналитику',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: AppColors.textLight, height: 1.4),
               ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Пока нет операций',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Добавьте первую транзакцию,\nчтобы увидеть аналитику',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withValues(alpha: 0.6),
-                    height: 1.4,
-                  ),
-            ),
-          ],
+            ],
+          ),
         ),
       );
     }

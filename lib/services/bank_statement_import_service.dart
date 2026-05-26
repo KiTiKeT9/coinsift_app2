@@ -211,11 +211,11 @@ class BankStatementImportService {
 
     // Поддерживаем разделители ; и ,
     final separator = content.contains(';') ? ';' : ',';
-    final rows = CsvToListConverter(
+    final converter = CsvDecoder(
       fieldDelimiter: separator,
-      eol: '\n',
-      shouldParseNumbers: false,
-    ).convert(content);
+      dynamicTyping: false,
+    );
+    final rows = converter.convert(content);
 
     if (rows.isEmpty) return const _ParsedRows([], 0, 0);
 

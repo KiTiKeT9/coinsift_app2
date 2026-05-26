@@ -51,7 +51,7 @@ class _TinkoffOAuthScreenState extends State<TinkoffOAuthScreen> {
 
   void _checkForCallback(String url) {
     // Проверяем redirect URI после авторизации
-    if (url.contains('coinsift://tinkoff-callback')) {
+    if (url.contains('monetka://tinkoff-callback')) {
       final uri = Uri.parse(url);
       final code = uri.queryParameters['code'];
       final _ = uri.queryParameters['state'];

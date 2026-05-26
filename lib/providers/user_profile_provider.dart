@@ -18,6 +18,8 @@ class UserProfileProvider with ChangeNotifier {
   bool get enablePinLock => _profile?.enablePinLock ?? false;
   bool get useCustomBackground => _profile?.useCustomBackground ?? false;
   String? get customBackgroundPath => _profile?.customBackgroundPath;
+  bool get useDynamicColor => _profile?.useDynamicColor ?? true;
+  String get displayCurrency => _profile?.displayCurrency ?? 'RUB';
 
   Future<void> loadProfile() async {
     _isLoading = true;
@@ -44,6 +46,8 @@ class UserProfileProvider with ChangeNotifier {
       language: 'ru',
       enablePinLock: false,
       useCustomBackground: false,
+      useDynamicColor: true,
+      displayCurrency: 'RUB',
     );
     await _db.saveUserProfile(_profile!);
     notifyListeners();
@@ -61,6 +65,8 @@ class UserProfileProvider with ChangeNotifier {
     bool? enablePinLock,
     String? customBackgroundPath,
     bool? useCustomBackground,
+    bool? useDynamicColor,
+    String? displayCurrency,
   }) async {
     if (_profile == null) return;
 
@@ -78,6 +84,8 @@ class UserProfileProvider with ChangeNotifier {
       enablePinLock: enablePinLock ?? _profile!.enablePinLock,
       customBackgroundPath: customBackgroundPath ?? _profile!.customBackgroundPath,
       useCustomBackground: useCustomBackground ?? _profile!.useCustomBackground,
+      useDynamicColor: useDynamicColor ?? _profile!.useDynamicColor,
+      displayCurrency: displayCurrency ?? _profile!.displayCurrency,
     );
 
     await _db.saveUserProfile(_profile!);
@@ -112,5 +120,13 @@ class UserProfileProvider with ChangeNotifier {
 
   Future<void> toggleCustomBackground() async {
     await updateProfile(useCustomBackground: !(_profile?.useCustomBackground ?? false));
+  }
+
+  Future<void> toggleDynamicColor() async {
+    await updateProfile(useDynamicColor: !(_profile?.useDynamicColor ?? true));
+  }
+
+  Future<void> setDisplayCurrency(String currency) async {
+    await updateProfile(displayCurrency: currency);
   }
 }
