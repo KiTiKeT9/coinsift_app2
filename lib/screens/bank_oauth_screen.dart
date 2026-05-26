@@ -61,9 +61,9 @@ class _BankOAuthScreenState extends State<BankOAuthScreen> {
     // Проверяем redirect URI после авторизации
     // Разные банки используют разные callback схемы
     final callbackPatterns = [
-      'coinsift://${widget.bankConfig.id}-callback',
-      '${widget.bankConfig.id}://callback',
-      'coinsift://bank-callback',
+      'monetka://${widget.bankConfig.id}-callback',
+
+      'monetka://bank-callback',
     ];
 
     for (final pattern in callbackPatterns) {

@@ -55,11 +55,11 @@
 
    | Поле | Значение |
    |------|----------|
-   | Название приложения | `CoinSift` |
+   | Название приложения | `Монетка` |
    | Описание | `Приложение для учёта личных финансов` |
    | Тип приложения | `Мобильное приложение` |
    | Platform | `Flutter (Android/iOS)` |
-   | Redirect URI | `coinsift://belink-callback` |
+   | Redirect URI | `monetka://belink-callback` |
 
 4. **Нажмите "Создать"**
 
@@ -201,8 +201,8 @@ Authorization: Bearer {ACCESS_TOKEN}
 
 ### Проблема: "Redirect URI mismatch"
 **Решение:** Убедитесь что Redirect URI в приложении совпадает с настройками в Belink:
-- В приложении: `coinsift://belink-callback`
-- В Belink Dashboard: `coinsift://belink-callback`
+- В приложении: `monetka://belink-callback`
+- В Belink Dashboard: `monetka://belink-callback`
 
 ### Проблема: "Token expired"
 **Решение:** Сервис автоматически обновляет токен. Если проблема сохраняется - переподключите банк
@@ -265,11 +265,11 @@ Authorization: Bearer {ACCESS_TOKEN}
 ## ✅ Чек-лист настройки
 
 - [ ] Зарегистрировались на belink.ru/developers
-- [ ] Создали приложение "CoinSift"
+- [ ] Создали приложение "Монетка"
 - [ ] Скопировали Client ID
 - [ ] Скопировали Client Secret  
 - [ ] Вставили ключи в `api_config.dart`
-- [ ] Настроили Redirect URI: `coinsift://belink-callback`
+- [ ] Настроили Redirect URI: `monetka://belink-callback`
 - [ ] Протестировали в Sandbox режиме
 - [ ] Подключили хотя бы 1 банк
 - [ ] Убедились что транзакции отображаются

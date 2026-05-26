@@ -9,6 +9,7 @@ class StatsCard extends StatelessWidget {
   final IconData icon;
   final Color color;
   final Color? gradientEnd;
+  final String? currency;
 
   const StatsCard({
     super.key,
@@ -17,6 +18,7 @@ class StatsCard extends StatelessWidget {
     required this.icon,
     required this.color,
     this.gradientEnd,
+    this.currency,
   });
 
   @override
@@ -81,7 +83,7 @@ class StatsCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            AppUtils.formatCurrency(amount),
+            AppUtils.formatCurrency(amount, currency: currency ?? 'RUB'),
             style: theme.textTheme.titleLarge?.copyWith(
               fontSize: 18,
               fontWeight: FontWeight.w800,

@@ -3,9 +3,11 @@ import 'package:provider/provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../providers/investments_provider.dart';
+import '../providers/user_profile_provider.dart';
 import '../models/investment.dart';
 import '../models/investment_instrument.dart';
 import '../services/investment_api_service.dart';
+import '../services/currency_service.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_utils.dart';
 import '../widgets/cached_logo_image.dart';
@@ -64,8 +66,9 @@ class PortfolioTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<InvestmentsProvider>(
-      builder: (context, provider, _) {
+    return Consumer2<InvestmentsProvider, UserProfileProvider>(
+      builder: (context, provider, profileProvider, _) {
+        final displayCurrency = profileProvider.displayCurrency;
         if (provider.isLoading && provider.investments.isEmpty) {
           return const Center(child: CircularProgressIndicator());
         }
@@ -83,11 +86,11 @@ class PortfolioTab extends StatelessWidget {
             padding: const EdgeInsets.all(16),
             physics: const BouncingScrollPhysics(),
             children: [
-              _buildPortfolioSummary(provider),
+              _buildPortfolioSummary(provider, displayCurrency),
               const SizedBox(height: 24),
               _buildAllocationChart(provider, context),
               const SizedBox(height: 24),
-              _buildHoldingsList(provider, context),
+              _buildHoldingsList(provider, context, displayCurrency),
               const SizedBox(height: 100),
             ],
           ),
@@ -134,9 +137,13 @@ class PortfolioTab extends StatelessWidget {
     );
   }
 
-  Widget _buildPortfolioSummary(InvestmentsProvider provider) {
+  Widget _buildPortfolioSummary(InvestmentsProvider provider, String displayCurrency) {
     final profitLoss = provider.totalProfitLoss;
     final isPositive = profitLoss >= 0;
+    final cs = CurrencyService();
+    final totalValueConverted = cs.convertSync(provider.totalValue, 'RUB', displayCurrency) ?? provider.totalValue;
+    final totalCostConverted = cs.convertSync(provider.totalCost, 'RUB', displayCurrency) ?? provider.totalCost;
+    final profitLossConverted = cs.convertSync(profitLoss, 'RUB', displayCurrency) ?? profitLoss;
 
     return Container(
       padding: const EdgeInsets.all(24),
@@ -159,7 +166,7 @@ class PortfolioTab extends StatelessWidget {
           const Text('Общая стоимость', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
           const SizedBox(height: 8),
           Text(
-            AppUtils.formatCurrency(provider.totalValue),
+            AppUtils.formatCurrency(totalValueConverted, currency: displayCurrency),
             style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.w800, letterSpacing: -1),
           ),
           const SizedBox(height: 20),
@@ -181,7 +188,7 @@ class PortfolioTab extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               Text(
-                (isPositive ? '+' : '') + AppUtils.formatCurrency(profitLoss),
+                (isPositive ? '+' : '') + AppUtils.formatCurrency(profitLossConverted, currency: displayCurrency),
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 15),
               ),
             ],
@@ -189,7 +196,7 @@ class PortfolioTab extends StatelessWidget {
           const SizedBox(height: 24),
           Row(
             children: [
-              Expanded(child: _SummaryItem(label: 'Вложено', value: AppUtils.formatCurrency(provider.totalCost))),
+              Expanded(child: _SummaryItem(label: 'Вложено', value: AppUtils.formatCurrency(totalCostConverted, currency: displayCurrency))),
               Container(width: 1, height: 30, color: Colors.white24),
               Expanded(child: _SummaryItem(label: 'Активы', value: '${provider.investments.length}')),
             ],
@@ -265,7 +272,7 @@ class PortfolioTab extends StatelessWidget {
     }).toList();
   }
 
-  Widget _buildHoldingsList(InvestmentsProvider provider, BuildContext context) {
+  Widget _buildHoldingsList(InvestmentsProvider provider, BuildContext context, String displayCurrency) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -275,6 +282,7 @@ class PortfolioTab extends StatelessWidget {
         ),
         ...provider.investments.map((investment) => _InvestmentTile(
           investment: investment,
+          displayCurrency: displayCurrency,
           onTap: () => _showEditInvestmentDialog(context, investment),
           onDelete: () => provider.deleteInvestment(investment.id),
         )),
@@ -644,10 +652,11 @@ class _SparklineChart extends StatelessWidget {
 
 class _InvestmentTile extends StatelessWidget {
   final Investment investment;
+  final String displayCurrency;
   final VoidCallback onTap;
   final VoidCallback onDelete;
 
-  const _InvestmentTile({required this.investment, required this.onTap, required this.onDelete});
+  const _InvestmentTile({required this.investment, required this.displayCurrency, required this.onTap, required this.onDelete});
 
   @override
   Widget build(BuildContext context) {
@@ -711,8 +720,10 @@ class _InvestmentTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(AppUtils.formatCurrency(investment.totalValue),
-                      style: const TextStyle(
+                  Text(AppUtils.formatCurrency(
+                    CurrencyService().convertSync(investment.totalValue, 'RUB', displayCurrency) ?? investment.totalValue,
+                    currency: displayCurrency,
+                  ), style: const TextStyle(
                           fontWeight: FontWeight.bold, fontSize: 15)),
                   Text(
                     '${isPositive ? '+' : ''}${investment.profitLossPercent.toStringAsFixed(2)}%',

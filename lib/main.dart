@@ -2,22 +2,28 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:dynamic_color/dynamic_color.dart';
 
 import 'models/account.dart';
 import 'models/transaction.dart';
 import 'models/user_profile.dart';
 import 'models/investment.dart';
 import 'models/calculator_record.dart';
+import 'models/currency_rate.dart';
+import 'models/goal.dart';
 
 import 'providers/accounts_provider.dart';
+import 'providers/goals_provider.dart';
 import 'providers/bank_signals_controller.dart';
 import 'providers/investments_provider.dart';
 import 'providers/transactions_provider.dart';
 import 'providers/user_profile_provider.dart';
 
+import 'services/currency_service.dart';
 import 'services/database_service.dart';
 import 'services/logo_cache_service.dart';
 import 'services/security_service.dart';
@@ -52,7 +58,7 @@ void main() async {
     await _initStorage();
   }
 
-  runApp(const CoinSiftApp());
+  runApp(const MonetkaApp());
 }
 
 Future<void> _initStorage() async {
@@ -73,6 +79,18 @@ Future<void> _initStorage() async {
   if (!Hive.isAdapterRegistered(CalculatorRecordAdapter().typeId)) {
     Hive.registerAdapter(CalculatorRecordAdapter());
   }
+  if (!Hive.isAdapterRegistered(CurrencyRateAdapter().typeId)) {
+    Hive.registerAdapter(CurrencyRateAdapter());
+  }
+  if (!Hive.isAdapterRegistered(GoalAdapter().typeId)) {
+    Hive.registerAdapter(GoalAdapter());
+  }
+  if (!Hive.isAdapterRegistered(GoalStageAdapter().typeId)) {
+    Hive.registerAdapter(GoalStageAdapter());
+  }
+  if (!Hive.isAdapterRegistered(GoalNoteAdapter().typeId)) {
+    Hive.registerAdapter(GoalNoteAdapter());
+  }
 
   await SecurityService().init();
   await DatabaseService().init();
@@ -91,8 +109,8 @@ Future<void> _clearHiveBoxes() async {
   }
 }
 
-class CoinSiftApp extends StatelessWidget {
-  const CoinSiftApp({super.key});
+class MonetkaApp extends StatelessWidget {
+  const MonetkaApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -101,6 +119,7 @@ class CoinSiftApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => AccountsProvider()),
         ChangeNotifierProvider(create: (_) => TransactionsProvider()),
         ChangeNotifierProvider(create: (_) => InvestmentsProvider()),
+        ChangeNotifierProvider(create: (_) => GoalsProvider()),
         // Профиль грузим сразу при создании, чтобы тема (light/dark)
         // применялась с первого кадра, ещё до Splash.
         ChangeNotifierProvider(
@@ -116,19 +135,38 @@ class CoinSiftApp extends StatelessWidget {
               (prev ?? BankSignalsController(txs))..updateTransactions(txs),
         ),
       ],
-      child: Consumer<UserProfileProvider>(
-        builder: (context, profileProvider, _) {
-          return MaterialApp(
-            title: 'CoinSift',
-            debugShowCheckedModeBanner: false,
-            theme: AppTheme.lightTheme,
-            darkTheme: AppTheme.darkTheme,
-            themeMode: profileProvider.isDarkTheme ? ThemeMode.dark : ThemeMode.light,
-            navigatorKey: navigatorKey,
-            home: const SplashScreen(),
-            routes: {
-              '/bank-aggregator': (context) => const BankAggregatorScreen(),
-              '/bank-import': (context) => const BankImportScreen(),
+      child: DynamicColorBuilder(
+        builder: (lightDynamic, darkDynamic) {
+          return Consumer<UserProfileProvider>(
+            builder: (context, profileProvider, _) {
+              final useDynamic = profileProvider.useDynamicColor;
+              return MaterialApp(
+                title: 'Монетка',
+                debugShowCheckedModeBanner: false,
+                locale: const Locale('ru', 'RU'),
+                supportedLocales: const [
+                  Locale('ru', 'RU'),
+                  Locale('en', 'US'),
+                ],
+                localizationsDelegates: const [
+                  GlobalMaterialLocalizations.delegate,
+                  GlobalWidgetsLocalizations.delegate,
+                  GlobalCupertinoLocalizations.delegate,
+                ],
+                theme: AppTheme.lightTheme(
+                  dynamicColorScheme: useDynamic ? lightDynamic : null,
+                ),
+                darkTheme: AppTheme.darkTheme(
+                  dynamicColorScheme: useDynamic ? darkDynamic : null,
+                ),
+                themeMode: profileProvider.isDarkTheme ? ThemeMode.dark : ThemeMode.light,
+                navigatorKey: navigatorKey,
+                home: const SplashScreen(),
+                routes: {
+                  '/bank-aggregator': (context) => const BankAggregatorScreen(),
+                  '/bank-import': (context) => const BankImportScreen(),
+                },
+              );
             },
           );
         },
@@ -178,12 +216,15 @@ class _SplashScreenState extends State<SplashScreen>
       final accountsProvider = context.read<AccountsProvider>();
       final transactionsProvider = context.read<TransactionsProvider>();
       final investmentsProvider = context.read<InvestmentsProvider>();
+      final goalsProvider = context.read<GoalsProvider>();
 
       await Future.wait([
         profileProvider.loadProfile(),
         accountsProvider.loadAccounts(),
         transactionsProvider.loadTransactions(),
         investmentsProvider.loadInvestments(),
+        goalsProvider.loadGoals(),
+        CurrencyService().fetchRates(),
       ]);
 
       // Автостарт SMS/push-листенеров, если пользователь их включал.
@@ -296,7 +337,7 @@ class _SplashScreenState extends State<SplashScreen>
                     ),
                     const SizedBox(height: 32),
                     const Text(
-                      'CoinSift',
+                      'Монетка',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 42,
@@ -306,7 +347,7 @@ class _SplashScreenState extends State<SplashScreen>
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Управляйте финансами легко',
+                      'Управляйте деньгами легко',
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.9),
                         fontSize: 16,

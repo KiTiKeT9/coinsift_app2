@@ -9,7 +9,7 @@
         tools:ignore="ProtectedPermissions"/>
 
     <application
-        android:label="coinsift_app"
+        android:label="Монетка"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -43,7 +43,7 @@
         <!-- notification_listener_service: даёт доступ к push-уведомлениям банков. -->
         <service
             android:name="notification.listener.service.NotificationListener"
-            android:label="Coinsift Notifications"
+            android:label="Монетка Уведомления"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
             android:exported="true">
             <intent-filter>

@@ -8,9 +8,12 @@ import '../providers/accounts_provider.dart';
 import '../providers/bank_signals_controller.dart';
 import '../providers/investments_provider.dart';
 import '../providers/user_profile_provider.dart';
+import '../models/user_profile.dart';
 import '../services/security_service.dart';
+import '../services/currency_service.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_utils.dart';
+
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -100,6 +103,24 @@ class ProfileScreen extends StatelessWidget {
                             activeThumbColor: AppColors.primary,
                           ),
                         ),
+                        _SettingsItem(
+                          icon: Icons.palette_outlined,
+                          title: 'Material You',
+                          subtitle: provider.useDynamicColor
+                              ? 'Динамические цвета из обоев' : 'Классическая тема',
+                          trailing: Switch.adaptive(
+                            value: provider.useDynamicColor,
+                            onChanged: (_) => provider.toggleDynamicColor(),
+                            activeThumbColor: AppColors.primary,
+                          ),
+                        ),
+                        _SettingsItem(
+                          icon: Icons.currency_exchange,
+                          title: 'Валюта отображения',
+                          subtitle: provider.displayCurrency,
+                          trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textLight),
+                          onTap: () => _showCurrencyPicker(context, provider),
+                        ),
                       ]),
                       
                       const SizedBox(height: 32),
@@ -123,7 +144,7 @@ class ProfileScreen extends StatelessWidget {
                       const SizedBox(height: 40),
                       const Center(
                         child: Text(
-                          'CoinSift v1.0.0',
+                          'Монетка v1.0.0',
                           style: TextStyle(color: AppColors.textLight, fontSize: 13, fontWeight: FontWeight.w500),
                         ),
                       ),
@@ -138,7 +159,7 @@ class ProfileScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildAvatar(profile, provider, context) {
+  Widget _buildAvatar(UserProfile? profile, UserProfileProvider provider, BuildContext context) {
     return Stack(
       children: [
         Container(
@@ -185,6 +206,10 @@ class ProfileScreen extends StatelessWidget {
   Widget _buildBalanceOverview(BuildContext context) {
     final accountsProvider = context.watch<AccountsProvider>();
     final investmentsProvider = context.watch<InvestmentsProvider>();
+    final profileProv = context.watch<UserProfileProvider>();
+    final displayCurrency = profileProv.displayCurrency;
+    final cs = CurrencyService();
+    final budgetConverted = cs.convertSync(profileProv.profile?.monthlyBudget ?? 0, 'RUB', displayCurrency) ?? (profileProv.profile?.monthlyBudget ?? 0);
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -197,7 +222,7 @@ class ProfileScreen extends StatelessWidget {
         children: [
           _buildQuickStat('Счета', '${accountsProvider.activeAccounts.length}', AppColors.primary),
           Container(width: 1, height: 40, color: Colors.black.withValues(alpha: 0.05)),
-          _buildQuickStat('Бюджет', AppUtils.formatCurrency(context.watch<UserProfileProvider>().profile?.monthlyBudget ?? 0), AppColors.secondary),
+          _buildQuickStat('Бюджет', AppUtils.formatCurrency(budgetConverted, currency: displayCurrency), AppColors.secondary),
           Container(width: 1, height: 40, color: Colors.black.withValues(alpha: 0.05)),
           _buildQuickStat('Активы', '${investmentsProvider.investments.length}', AppColors.success),
         ],
@@ -345,6 +370,61 @@ class ProfileScreen extends StatelessWidget {
       context: context,
       builder: (_) => _EditProfileDialog(provider: provider),
     );
+  }
+
+  void _showCurrencyPicker(BuildContext context, UserProfileProvider provider) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 16),
+              const Text(
+                'Валюта отображения',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Все суммы будут сконвертированы в выбранную валюту',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ...CurrencyService.supportedCurrencies.map((c) => ListTile(
+                leading: Text(CurrencyService.getFlag(c), style: const TextStyle(fontSize: 28)),
+                title: Text(c),
+                subtitle: Text(_currencyName(c)),
+                trailing: provider.displayCurrency == c
+                    ? const Icon(Icons.check_circle, color: AppColors.primary)
+                    : null,
+                onTap: () {
+                  provider.setDisplayCurrency(c);
+                  Navigator.pop(ctx);
+                },
+              )),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _currencyName(String code) {
+    const names = {
+      'RUB': 'Российский рубль', 'USD': 'Доллар США', 'EUR': 'Евро',
+      'GBP': 'Фунт стерлингов', 'CNY': 'Китайский юань', 'JPY': 'Японская иена',
+      'CHF': 'Швейцарский франк', 'KZT': 'Казахстанский тенге',
+      'BYN': 'Белорусский рубль', 'AMD': 'Армянский драм',
+    };
+    return names[code] ?? code;
   }
 }
 

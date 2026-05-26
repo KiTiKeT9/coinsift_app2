@@ -1,11 +1,14 @@
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import '../models/account.dart';
+import '../models/currency_rate.dart';
 import '../services/database_service.dart';
+import '../services/currency_service.dart';
 
 class AccountsProvider with ChangeNotifier {
   final DatabaseService _db = DatabaseService();
   final _uuid = const Uuid();
+  final _currencyService = CurrencyService();
 
   List<Account> _accounts = [];
   bool _isLoading = false;
@@ -18,6 +21,31 @@ class AccountsProvider with ChangeNotifier {
       0,
       (sum, account) => sum + account.balance,
     );
+  }
+
+  double getConvertedBalance(String toCurrency) {
+    final cached = _currencyService.cachedRates;
+    if (cached == null || cached.isEmpty) return totalBalance;
+    return _accounts.where((a) => !a.isArchived).fold(
+      0,
+      (sum, account) => sum + _convert(account.balance, account.currency, toCurrency, cached),
+    );
+  }
+
+  double _convert(double amount, String from, String to, List<CurrencyRate> rates) {
+    if (from == to) return amount;
+    if (to == 'USD') {
+      final rate = rates.where((r) => r.currency == from).firstOrNull;
+      return rate != null ? amount / rate.rate : amount;
+    }
+    if (from == 'USD') {
+      final rate = rates.where((r) => r.currency == to).firstOrNull;
+      return rate != null ? amount * rate.rate : amount;
+    }
+    final fromRate = rates.where((r) => r.currency == from).firstOrNull;
+    final toRate = rates.where((r) => r.currency == to).firstOrNull;
+    if (fromRate == null || toRate == null) return amount;
+    return amount / fromRate.rate * toRate.rate;
   }
 
   List<Account> get activeAccounts =>

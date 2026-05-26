@@ -7,6 +7,7 @@ import 'package:animate_do/animate_do.dart';
 import '../providers/accounts_provider.dart';
 import '../providers/transactions_provider.dart';
 import '../providers/user_profile_provider.dart';
+import '../services/currency_service.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_utils.dart';
 import 'package:intl/intl.dart';
@@ -16,10 +17,10 @@ import '../widgets/stats_cards.dart';
 import '../widgets/transaction_list.dart';
 import 'add_transaction_screen.dart';
 import 'accounts_screen.dart';
-import 'calculators_screen.dart';
 import 'drafts_screen.dart';
 import 'investments_screen.dart';
 import 'profile_screen.dart';
+import 'tools_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -34,7 +35,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final List<Widget> _screens = [
     const HomeTab(),
     const AccountsScreen(),
-    const CalculatorsScreen(),
+    const ToolsScreen(),
     const InvestmentsScreen(),
     const ProfileScreen(),
   ];
@@ -137,9 +138,9 @@ class _GlassNavBar extends StatelessWidget {
                 label: 'Счета',
               ),
               NavigationDestination(
-                icon: Icon(Icons.calculate_outlined),
-                selectedIcon: Icon(Icons.calculate_rounded),
-                label: 'Расчеты',
+                icon: Icon(Icons.handyman_outlined),
+                selectedIcon: Icon(Icons.handyman_rounded),
+                label: 'Сервисы',
               ),
               NavigationDestination(
                 icon: Icon(Icons.trending_up_outlined),
@@ -245,6 +246,7 @@ class _HomeTabState extends State<HomeTab> {
                     child: _buildTotalBalanceCard(context),
                   ),
                 ),
+                _buildBudgetWarning(context),
                 const SizedBox(height: 24),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -255,14 +257,14 @@ class _HomeTabState extends State<HomeTab> {
                   ),
                 ),
                 const SizedBox(height: 32),
-                _buildSectionHeader(context, 'Аналитика', () {}),
+                _buildSectionHeader(context, 'Аналитика'),
                 FadeInUp(
                   delay: const Duration(milliseconds: 400),
                   duration: const Duration(milliseconds: 600),
                   child: const _ChartSection(),
                 ),
                 const SizedBox(height: 32),
-                _buildSectionHeader(context, 'Последние операции', () {}),
+                _buildSectionHeader(context, 'Последние операции'),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: FadeInUp(
@@ -280,35 +282,30 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
-  Widget _buildSectionHeader(BuildContext context, String title, VoidCallback onTap) {
+  Widget _buildSectionHeader(BuildContext context, String title) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 12, 16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            title,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.5,
-                ),
-          ),
-          TextButton(
-            onPressed: onTap,
-            child: const Text('См. все'),
-          ),
-        ],
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+      child: Center(
+        child: Text(
+          title,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.5,
+              ),
+        ),
       ),
     );
   }
 
   Widget _buildTotalBalanceCard(BuildContext context) {
+    final displayCurrency = context.watch<UserProfileProvider>().displayCurrency;
     return Consumer<AccountsProvider>(
       builder: (context, provider, _) {
         if (provider.isLoading && provider.accounts.isEmpty) {
           return const BalanceCardSkeleton();
         }
+        final balance = provider.getConvertedBalance(displayCurrency);
         return Container(
           width: double.infinity,
           padding: const EdgeInsets.all(24),
@@ -343,7 +340,7 @@ class _HomeTabState extends State<HomeTab> {
               ),
               const SizedBox(height: 8),
               Text(
-                AppUtils.formatCurrency(provider.totalBalance),
+                AppUtils.formatCurrency(balance, currency: displayCurrency),
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 34,
@@ -402,29 +399,106 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
+  Widget _buildBudgetWarning(BuildContext context) {
+    final displayCurrency = context.watch<UserProfileProvider>().displayCurrency;
+    final cs = CurrencyService();
+    return Consumer<TransactionsProvider>(
+      builder: (context, provider, _) {
+        if (!provider.budgetExceeded || provider.budgetWarningShown) {
+          return const SizedBox.shrink();
+        }
+
+        final overspend = provider.currentMonthExpenses - provider.monthlyBudget;
+        final overspendConverted = cs.convertSync(overspend, 'RUB', displayCurrency) ?? overspend;
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+          child: Material(
+            color: AppColors.error.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(16),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: () => provider.dismissBudgetWarning(),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppColors.error.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.warning_rounded, color: AppColors.error, size: 24),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Бюджет превышен!',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 15,
+                              color: AppColors.error,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Перерасход ${AppUtils.formatCurrency(overspendConverted, currency: displayCurrency)} в этом месяце',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      Icons.close,
+                      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
+                      size: 20,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildStatsCards(BuildContext context) {
+    final displayCurrency = context.watch<UserProfileProvider>().displayCurrency;
+    final cs = CurrencyService();
     return Consumer<TransactionsProvider>(
       builder: (context, provider, _) {
         if (provider.isLoading && provider.totalIncome == 0 && provider.totalExpenses == 0) {
           return const StatsCardsSkeleton();
         }
+        final incomeConverted = cs.convertSync(provider.totalIncome, 'RUB', displayCurrency) ?? provider.totalIncome;
+        final expensesConverted = cs.convertSync(provider.totalExpenses, 'RUB', displayCurrency) ?? provider.totalExpenses;
         return Row(
           children: [
             Expanded(
               child: StatsCard(
                 title: 'Доходы',
-                amount: provider.totalIncome,
+                amount: incomeConverted,
                 icon: Icons.arrow_downward_rounded,
                 color: AppColors.income,
+                currency: displayCurrency,
               ),
             ),
             const SizedBox(width: 16),
             Expanded(
               child: StatsCard(
                 title: 'Расходы',
-                amount: provider.totalExpenses,
+                amount: expensesConverted,
                 icon: Icons.arrow_upward_rounded,
                 color: AppColors.expense,
+                currency: displayCurrency,
               ),
             ),
           ],

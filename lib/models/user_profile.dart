@@ -43,6 +43,12 @@ class UserProfile extends HiveObject {
   @HiveField(12)
   bool useCustomBackground;
 
+  @HiveField(13)
+  bool useDynamicColor;
+
+  @HiveField(14)
+  String displayCurrency;
+
   UserProfile({
     required this.id,
     required this.name,
@@ -57,5 +63,7 @@ class UserProfile extends HiveObject {
     this.enablePinLock = false,
     this.customBackgroundPath,
     this.useCustomBackground = false,
+    this.useDynamicColor = true,
+    this.displayCurrency = 'RUB',
   });
 }
