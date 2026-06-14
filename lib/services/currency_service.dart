@@ -22,6 +22,20 @@ class CurrencyService {
     'RUB', 'USD', 'EUR', 'GBP', 'CNY', 'JPY', 'CHF', 'KZT', 'BYN', 'AMD',
   ];
 
+  /// Актуальные курсы на 14.06.2026 (fallback при отсутствии сети/кеша)
+  static const Map<String, double> defaultRates = {
+    'USD': 1,
+    'RUB': 72.418564,
+    'EUR': 0.864531,
+    'GBP': 0.746107,
+    'CNY': 6.781714,
+    'JPY': 160.232666,
+    'CHF': 0.796743,
+    'KZT': 489.008549,
+    'BYN': 2.754415,
+    'AMD': 368.36683,
+  };
+
   static const Map<String, String> currencyFlags = {
     'RUB': '🇷🇺', 'USD': '🇺🇸', 'EUR': '🇪🇺', 'GBP': '🇬🇧',
     'CNY': '🇨🇳', 'JPY': '🇯🇵', 'CHF': '🇨🇭', 'KZT': '🇰🇿',
@@ -60,7 +74,21 @@ class CurrencyService {
       debugPrint('CurrencyService fetch error: $e');
     }
 
-    return (await _loadFromCache()) ?? [];
+    final cached = await _loadFromCache();
+    if (cached != null && cached.isNotEmpty) return cached;
+
+    // Fallback: встроенные курсы (актуальны на 14.06.2026)
+    debugPrint('CurrencyService: using embedded default rates');
+    final now = DateTime.now();
+    _cachedRates = defaultRates.entries.map((e) => CurrencyRate(
+      currency: e.key,
+      rate: e.value,
+      baseCurrency: 'USD',
+      lastUpdated: now,
+    )).toList();
+    _lastFetch = now;
+    await _saveToCache(_cachedRates!, now);
+    return _cachedRates!;
   }
 
   Future<double?> convert(double amount, String from, String to) async {
@@ -72,7 +100,13 @@ class CurrencyService {
 
   double? convertSync(double amount, String from, String to) {
     if (from == to) return amount;
-    if (_cachedRates == null || _cachedRates!.isEmpty) return null;
+    if (_cachedRates == null || _cachedRates!.isEmpty) {
+      // Попробовать загрузить из кеша/дефолта
+      _cachedRates = defaultRates.entries.map((e) => CurrencyRate(
+        currency: e.key, rate: e.value, baseCurrency: 'USD', lastUpdated: DateTime.now(),
+      )).toList();
+      _lastFetch = DateTime.now();
+    }
     if (to == 'USD') {
       final rate = _cachedRates!.where((r) => r.currency == from).firstOrNull;
       return rate != null ? amount / rate.rate : null;

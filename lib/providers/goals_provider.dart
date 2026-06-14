@@ -78,44 +78,7 @@ class GoalsProvider with ChangeNotifier {
 
     final newAmount = goal.currentAmount + amount;
     final isCompleted = newAmount >= goal.targetAmount;
-    final stages = goal.stages.map((s) => GoalStage(
-      id: s.id,
-      title: s.title,
-      description: s.description,
-      targetAmount: s.targetAmount,
-      currentAmount: isCompleted ? s.targetAmount : s.currentAmount,
-      isCompleted: isCompleted || s.isCompleted,
-      sortOrder: s.sortOrder,
-    )).toList();
 
-    final updated = Goal(
-      id: goal.id,
-      title: goal.title,
-      description: goal.description,
-      targetAmount: goal.targetAmount,
-      currentAmount: newAmount,
-      currency: goal.currency,
-      createdAt: goal.createdAt,
-      deadline: goal.deadline,
-      iconEmoji: goal.iconEmoji,
-      category: goal.category,
-      stages: stages,
-      notes: goal.notes,
-      isCompleted: isCompleted,
-    );
-
-    if (!isCompleted) _updateStagesProgress(updated);
-
-    await box.put(goalId, updated);
-    await loadGoals();
-  }
-
-  Future<void> withdrawContribution(String goalId, double amount) async {
-    final box = await Hive.openBox<Goal>(_boxName);
-    final goal = box.get(goalId);
-    if (goal == null) return;
-
-    final newAmount = (goal.currentAmount - amount).clamp(0, double.infinity).toDouble();
     final updated = Goal(
       id: goal.id,
       title: goal.title,
@@ -132,7 +95,44 @@ class GoalsProvider with ChangeNotifier {
         title: s.title,
         description: s.description,
         targetAmount: s.targetAmount,
-        currentAmount: s.currentAmount,
+        currentAmount: isCompleted ? s.targetAmount : 0,
+        isCompleted: isCompleted,
+        sortOrder: s.sortOrder,
+      )).toList(),
+      notes: goal.notes,
+      isCompleted: isCompleted,
+    );
+
+    if (!isCompleted) _updateStagesProgress(updated);
+
+    await box.put(goalId, updated);
+    await loadGoals();
+  }
+
+  Future<void> withdrawContribution(String goalId, double amount) async {
+    final box = await Hive.openBox<Goal>(_boxName);
+    final goal = box.get(goalId);
+    if (goal == null) return;
+
+    final newAmount = (goal.currentAmount - amount).clamp(0, double.infinity).toDouble();
+
+    final updated = Goal(
+      id: goal.id,
+      title: goal.title,
+      description: goal.description,
+      targetAmount: goal.targetAmount,
+      currentAmount: newAmount,
+      currency: goal.currency,
+      createdAt: goal.createdAt,
+      deadline: goal.deadline,
+      iconEmoji: goal.iconEmoji,
+      category: goal.category,
+      stages: goal.stages.map((s) => GoalStage(
+        id: s.id,
+        title: s.title,
+        description: s.description,
+        targetAmount: s.targetAmount,
+        currentAmount: 0,
         isCompleted: false,
         sortOrder: s.sortOrder,
       )).toList(),
@@ -248,15 +248,28 @@ class GoalsProvider with ChangeNotifier {
   }
 
   void _updateStagesProgress(Goal goal) {
-    double totalTarget = goal.stages.fold(0, (sum, s) => sum + s.targetAmount);
-    if (totalTarget <= 0) return;
+    if (goal.stages.isEmpty) return;
 
-    for (final stage in goal.stages) {
-      if (stage.isCompleted) continue;
-      stage.currentAmount = (goal.currentAmount / totalTarget) * stage.targetAmount;
-      if (stage.currentAmount >= stage.targetAmount) {
-        stage.isCompleted = true;
+    // Сортируем этапы по порядку
+    final sorted = List<GoalStage>.from(goal.stages)
+      ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+
+    double remaining = goal.currentAmount;
+
+    for (final stage in sorted) {
+      if (remaining <= 0) {
+        stage.currentAmount = 0;
+        stage.isCompleted = false;
+        continue;
+      }
+      if (remaining >= stage.targetAmount) {
         stage.currentAmount = stage.targetAmount;
+        stage.isCompleted = true;
+        remaining -= stage.targetAmount;
+      } else {
+        stage.currentAmount = remaining;
+        stage.isCompleted = false;
+        remaining = 0;
       }
     }
   }
